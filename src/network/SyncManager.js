@@ -8,10 +8,17 @@ export default class SyncManager {
 
     serializeState(gridSystem, combatSystem, lootSystem, gameTime) {
         // Create a lightweight snapshot of the game state
+        const entities = [];
+        for (const [id, pos] of gridSystem.entities) {
+            const stats = combatSystem.getStats(id);
+            // Attach visual stats to the entity position data for rendering
+            entities.push([id, { ...pos, hp: stats ? stats.hp : 0, maxHp: stats ? stats.maxHp : 100 }]);
+        }
+
         return {
             t: Date.now(),
             // Convert Map to Array for JSON serialization
-            entities: Array.from(gridSystem.entities.entries()),
+            entities: entities,
             loot: Array.from(lootSystem.worldLoot.entries()),
             gameTime: gameTime,
             // Add combat stats if needed for UI
@@ -45,7 +52,14 @@ export default class SyncManager {
         if (!prev) return { entities: new Map(), loot: new Map(), gameTime: 0 }; 
         if (!next) return { entities: new Map(prev.entities), loot: new Map(prev.loot || []), gameTime: prev.gameTime };
 
-        const ratio = (renderTime - prev.t) / (next.t - prev.t);
+        let ratio = 0;
+        const timeDiff = next.t - prev.t;
+        if (timeDiff > 0.0001) { // Prevent division by extremely small numbers
+            ratio = (renderTime - prev.t) / timeDiff;
+        } else {
+            ratio = 1; // Fallback to latest state if timestamps are identical
+        }
+
         const interpolatedEntities = new Map();
         const lootMap = new Map(prev.loot || []); // Loot doesn't interpolate, just take previous
 
@@ -53,9 +67,22 @@ export default class SyncManager {
         const prevMap = new Map(prev.entities);
         next.entities.forEach(([id, nextPos]) => {
             const prevPos = prevMap.get(id) || nextPos;
-            const x = prevPos.x + (nextPos.x - prevPos.x) * ratio;
-            const y = prevPos.y + (nextPos.y - prevPos.y) * ratio;
-            interpolatedEntities.set(id, { x, y });
+            
+            // Sanitize inputs
+            const prevX = Number.isFinite(prevPos.x) ? prevPos.x : 0;
+            const prevY = Number.isFinite(prevPos.y) ? prevPos.y : 0;
+            const nextX = Number.isFinite(nextPos.x) ? nextPos.x : 0;
+            const nextY = Number.isFinite(nextPos.y) ? nextPos.y : 0;
+
+            const x = prevX + (nextX - prevX) * ratio;
+            const y = prevY + (nextY - prevY) * ratio;
+            
+            interpolatedEntities.set(id, { 
+                x, y, 
+                facing: nextPos.facing,
+                hp: nextPos.hp,
+                maxHp: nextPos.maxHp
+            });
         });
 
         return { entities: interpolatedEntities, loot: lootMap, gameTime: next.gameTime };

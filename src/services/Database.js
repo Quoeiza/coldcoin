@@ -4,15 +4,25 @@ export default class Database {
     }
 
     async getPlayer() {
-        const data = localStorage.getItem(this.storageKey);
-        return data ? JSON.parse(data) : { name: 'Unknown', gold: 0, extractions: 0 };
+        try {
+            const data = localStorage.getItem(this.storageKey);
+            return data ? JSON.parse(data) : { name: 'Unknown', gold: 0, extractions: 0 };
+        } catch (e) {
+            console.warn("Database: LocalStorage access denied or failed", e);
+            return { name: 'Unknown', gold: 0, extractions: 0 };
+        }
     }
 
     async savePlayer(playerData) {
-        const current = await this.getPlayer();
-        const updated = { ...current, ...playerData };
-        localStorage.setItem(this.storageKey, JSON.stringify(updated));
-        console.log("DB: Saved player data", updated);
-        return true;
+        try {
+            const current = await this.getPlayer();
+            const updated = { ...current, ...playerData };
+            localStorage.setItem(this.storageKey, JSON.stringify(updated));
+            console.log("DB: Saved player data", updated);
+            return true;
+        } catch (e) {
+            console.warn("Database: Save failed", e);
+            return false;
+        }
     }
 }

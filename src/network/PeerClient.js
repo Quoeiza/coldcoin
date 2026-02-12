@@ -52,6 +52,12 @@ export default class PeerClient extends EventEmitter {
     }
 
     send(data) {
-        this.connections.forEach(conn => conn.send(data));
+        this.connections.forEach(conn => {
+            try {
+                if (conn.open) conn.send(data);
+            } catch (e) {
+                console.warn("PeerClient Send Error:", e);
+            }
+        });
     }
 }

@@ -4,14 +4,19 @@ export default class GridSystem {
         this.height = height;
         this.tileSize = tileSize;
         this.grid = []; // 0: Floor, 1: Wall
+        this.torches = []; // Array of {x, y}
         this.entities = new Map(); // Map<EntityID, {x, y, facing: {x, y}}>
+        this.spatialMap = new Map(); // Map<"x,y", EntityID> - Optimization for O(1) lookups
     }
 
     initializeDungeon() {
         // 1. Fill with walls
         this.grid = new Array(this.height).fill(0).map(() => new Array(this.width).fill(1));
+        this.rooms = [];
+        this.torches = [];
 
         const rooms = [];
+        this.spatialMap.clear();
         const maxRooms = 10;
         const minSize = 5;
         const maxSize = 12;
@@ -39,6 +44,45 @@ export default class GridSystem {
                     this.createCorridor(prev.cx, prev.cy, newRoom.cx, newRoom.cy);
                 }
                 rooms.push(newRoom);
+                this.rooms.push(newRoom);
+            }
+        }
+
+        // 4. Generate Environmental Features (Lakes)
+        const features = [2, 3, 4]; // Water, Mud, Lava
+        for (let i = 0; i < 8; i++) {
+            const type = features[Math.floor(Math.random() * features.length)];
+            let cx = Math.floor(Math.random() * (this.width - 4)) + 2;
+            let cy = Math.floor(Math.random() * (this.height - 4)) + 2;
+            
+            // Random Walk for organic shape
+            for (let j = 0; j < 15; j++) {
+                if (cx > 0 && cx < this.width - 1 && cy > 0 && cy < this.height - 1) {
+                    if (this.grid[cy][cx] === 0) { // Only replace floor
+                        this.grid[cy][cx] = type;
+                    }
+                }
+                cx += Math.floor(Math.random() * 3) - 1;
+                cy += Math.floor(Math.random() * 3) - 1;
+            }
+        }
+
+        // 5. Place Wall Torches
+        for (let y = 1; y < this.height - 1; y++) {
+            for (let x = 1; x < this.width - 1; x++) {
+                if (this.grid[y][x] === 1) {
+                    // Check if adjacent to floor
+                    let hasFloor = false;
+                    if (this.grid[y+1][x] === 0) hasFloor = true;
+                    else if (this.grid[y-1][x] === 0) hasFloor = true;
+                    else if (this.grid[y][x+1] === 0) hasFloor = true;
+                    else if (this.grid[y][x-1] === 0) hasFloor = true;
+
+                    if (hasFloor && Math.random() < 0.05) {
+                        this.grid[y][x] = 5; // Wall Torch
+                        this.torches.push({ x, y });
+                    }
+                }
             }
         }
     }
@@ -64,7 +108,45 @@ export default class GridSystem {
 
     isWalkable(x, y) {
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-        return this.grid[y][x] === 0;
+        const t = this.grid[y][x];
+        return t === 0 || t === 2 || t === 3 || t === 4 || t === 9;
+    }
+
+    getMovementCost(x, y) {
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) return 1.0;
+        const t = this.grid[y][x];
+        if (t === 2 || t === 3) return 2.0; // Water/Mud slows significantly
+        if (t === 4) return 1.5; // Lava slows
+        return 1.0;
+    }
+
+    hasLineOfSight(x0, y0, x1, y1) {
+        // Ensure integers and finite numbers
+        x0 = Math.floor(x0); y0 = Math.floor(y0);
+        x1 = Math.floor(x1); y1 = Math.floor(y1);
+        if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) return false;
+
+        let dx = Math.abs(x1 - x0);
+        let dy = Math.abs(y1 - y0);
+        let sx = (x0 < x1) ? 1 : -1;
+        let sy = (y0 < y1) ? 1 : -1;
+        let err = dx - dy;
+
+        let loops = 0;
+        while (true) {
+            if (loops++ > 100) return false; // Safety break
+            if (x0 === x1 && y0 === y1) return true;
+            
+            // Bounds check
+            if (y0 < 0 || y0 >= this.height || x0 < 0 || x0 >= this.width) return false;
+
+            // Check wall (blocking)
+            if (this.grid[y0][x0] === 1 || this.grid[y0][x0] === 5) return false;
+
+            let e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx) { err += dx; y0 += sy; }
+        }
     }
 
     // Returns true if move successful
@@ -80,14 +162,20 @@ export default class GridSystem {
         const newX = pos.x + dx;
         const newY = pos.y + dy;
 
+        // Diagonal check: Prevent moving through hard corners (two adjacent walls)
+        if (dx !== 0 && dy !== 0) {
+            if (!this.isWalkable(pos.x + dx, pos.y) && !this.isWalkable(pos.x, pos.y + dy)) {
+                return { success: false, collision: 'wall' };
+            }
+        }
+
         if (this.isWalkable(newX, newY)) {
             // Check for entity collision (very basic O(N) for now)
-            for (const [otherId, otherPos] of this.entities) {
-                if (otherId !== entityId && otherPos.x === newX && otherPos.y === newY) {
-                    return { success: false, collision: otherId };
-                }
+            const otherId = this.getEntityAt(newX, newY);
+            if (otherId && otherId !== entityId) {
+                return { success: false, collision: otherId };
             }
-            
+            this.updateSpatialMap(entityId, pos.x, pos.y, newX, newY);
             pos.x = newX;
             pos.y = newY;
             return { success: true, x: newX, y: newY };
@@ -96,21 +184,41 @@ export default class GridSystem {
         return { success: false, collision: 'wall' };
     }
 
+    updateSpatialMap(id, oldX, oldY, newX, newY) {
+        this.spatialMap.delete(`${oldX},${oldY}`);
+        this.spatialMap.set(`${newX},${newY}`, id);
+    }
+
     getEntityAt(x, y) {
-        for (const [id, pos] of this.entities) {
-            if (pos.x === x && pos.y === y) {
-                return id;
-            }
-        }
-        return null;
+        return this.spatialMap.get(`${x},${y}`) || null;
     }
 
     addEntity(id, x, y) {
         this.entities.set(id, { x, y, facing: { x: 0, y: 1 } });
+        this.spatialMap.set(`${x},${y}`, id);
     }
 
     removeEntity(id) {
+        const pos = this.entities.get(id);
+        if (pos) {
+            const key = `${pos.x},${pos.y}`;
+            if (this.spatialMap.get(key) === id) {
+                this.spatialMap.delete(key);
+            }
+        }
         this.entities.delete(id);
+    }
+
+    getValidSpawnLocations() {
+        const locations = [];
+        for (let y = 0; y < this.height; y++) {
+            for (let x = 0; x < this.width; x++) {
+                if (this.grid[y][x] === 0) { // Only spawn on clean floor
+                    locations.push({ x, y });
+                }
+            }
+        }
+        return locations;
     }
 
     getSpawnPoint() {
@@ -119,12 +227,26 @@ export default class GridSystem {
         while(attempts < 100) {
             const x = Math.floor(Math.random() * this.width);
             const y = Math.floor(Math.random() * this.height);
-            if (this.grid[y][x] === 0) {
+            if (this.grid[y][x] === 0 && !this.getEntityAt(x, y)) {
                 return { x, y };
             }
             attempts++;
         }
         return { x: 1, y: 1 }; // Fallback
+    }
+
+    getChestSpawnLocations() {
+        const locs = [];
+        if (!this.rooms) return locs;
+        
+        for (const r of this.rooms) {
+            // Add corners (guaranteed to be inside room and usually safe from center-corridors)
+            locs.push({ x: r.x, y: r.y });
+            locs.push({ x: r.x + r.w - 1, y: r.y });
+            locs.push({ x: r.x, y: r.y + r.h - 1 });
+            locs.push({ x: r.x + r.w - 1, y: r.y + r.h - 1 });
+        }
+        return locs;
     }
 
     setTile(x, y, value) {

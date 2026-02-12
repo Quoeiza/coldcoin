@@ -1,7 +1,13 @@
 export default class AudioSystem {
     constructor() {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-        this.enabled = true;
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtor) {
+            this.ctx = new AudioCtor();
+            this.enabled = true;
+        } else {
+            console.warn("AudioContext not supported");
+            this.enabled = false;
+        }
     }
 
     playTone(freq, type, duration, vol = 0.1) {
@@ -24,25 +30,28 @@ export default class AudioSystem {
 
     play(effect) {
         // Resume context if suspended (browser autoplay policy)
-        if (this.ctx.state === 'suspended') {
+        if (this.enabled && this.ctx.state === 'suspended') {
             this.ctx.resume();
         }
 
+        // Randomize pitch slightly (±10%) to reduce auditory fatigue
+        const variance = 0.9 + Math.random() * 0.2;
+
         switch(effect) {
             case 'attack':
-                this.playTone(150, 'sawtooth', 0.1, 0.05);
+                this.playTone(150 * variance, 'sawtooth', 0.1, 0.05);
                 break;
             case 'hit':
-                this.playTone(100, 'square', 0.1, 0.05);
+                this.playTone(100 * variance, 'square', 0.1, 0.05);
                 break;
             case 'step':
-                this.playTone(50, 'sine', 0.05, 0.02);
+                this.playTone(50 * variance, 'sine', 0.05, 0.02);
                 break;
             case 'pickup':
-                this.playTone(600, 'sine', 0.1, 0.05);
+                this.playTone(600 * variance, 'sine', 0.1, 0.05);
                 break;
             case 'death':
-                this.playTone(50, 'sawtooth', 0.5, 0.1);
+                this.playTone(50 * variance, 'sawtooth', 0.5, 0.1);
                 break;
         }
     }

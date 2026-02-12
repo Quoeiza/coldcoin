@@ -7,6 +7,9 @@ body, html {
     background-color: #111;
     font-family: 'Courier New', Courier, monospace;
     color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 #game-canvas {
@@ -61,29 +64,6 @@ button {
     touch-action: manipulation;
 }
 
-#inventory-panel {
-    position: absolute;
-    bottom: 20px;
-    right: 20px;
-    background: rgba(0, 0, 0, 0.8);
-    border: 1px solid #666;
-    padding: 10px;
-    width: 200px;
-    pointer-events: auto;
-}
-
-#inventory-panel h3 {
-    margin: 0 0 10px 0;
-    font-size: 14px;
-    color: #FFD700;
-}
-
-.inv-item {
-    font-size: 12px;
-    padding: 2px 0;
-    border-bottom: 1px solid #333;
-}
-
 #game-timer {
     position: absolute;
     top: 10px;
@@ -123,6 +103,7 @@ button {
     justify-content: center;
     z-index: 200;
     gap: 15px;
+    pointer-events: auto;
 }
 
 #lobby-screen input {
@@ -135,4 +116,246 @@ button {
 
 .hidden {
     display: none !important;
+}
+
+/* Inventory System */
+.ui-icon-btn {
+    background: #333;
+    border: 1px solid #555;
+    color: white;
+    padding: 5px 10px;
+    font-size: 20px;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+#inventory-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 300px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 2px solid #444;
+    padding: 15px;
+    z-index: 150;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    box-shadow: 0 0 15px rgba(0,0,0,0.8);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #444;
+    padding-bottom: 10px;
+}
+
+.modal-header h3 {
+    margin: 0;
+    color: #FFD700;
+}
+
+.equipment-slots {
+    display: flex;
+    justify-content: space-around;
+    padding: 10px 0;
+    background: rgba(0,0,0,0.3);
+}
+
+.slot-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: #aaa;
+}
+
+.equip-slot {
+    width: 48px;
+    height: 48px;
+    background: #222;
+    border: 1px dashed #555;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.inventory-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 5px;
+    min-height: 150px;
+}
+
+.inv-slot {
+    width: 48px;
+    height: 48px;
+    background: #2a2a2a;
+    border: 1px solid #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+}
+
+.inv-slot:hover {
+    border-color: #666;
+}
+
+.item-icon {
+    width: 32px;
+    height: 32px;
+    background-color: #555; /* Placeholder if no sprite */
+    border-radius: 4px;
+    pointer-events: none; /* Let drag events bubble from slot */
+}
+
+#ground-loot-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 250px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 2px solid #666;
+    padding: 15px;
+    z-index: 160;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#loot-notification {
+    position: absolute;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #FFD700;
+    font-size: 20px;
+    font-weight: bold;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    pointer-events: none;
+    transition: opacity 0.5s;
+}
+
+.item-count {
+    position: absolute;
+    bottom: 0;
+    right: 2px;
+    font-size: 10px;
+    color: white;
+    text-shadow: 1px 1px 0 #000;
+    font-weight: bold;
+}
+
+#quick-slots-hud {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.quick-slot-hud-item {
+    width: 40px;
+    height: 40px;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid #444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.key-label {
+    position: absolute;
+    top: -15px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: #aaa;
+}
+
+#kill-feed {
+    position: absolute;
+    top: 50px;
+    right: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+    pointer-events: none;
+    z-index: 100;
+}
+
+.kill-msg {
+    background: rgba(0, 0, 0, 0.6);
+    color: #ddd;
+    padding: 5px 10px;
+    border-left: 3px solid #a33;
+    font-size: 14px;
+    animation: fadeOut 5s forwards;
+}
+
+@keyframes fadeOut {
+    0% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+.highlight {
+    color: #FFD700;
+    font-weight: bold;
+}
+
+#combat-log {
+    position: absolute;
+    bottom: 100px; /* Above mobile controls */
+    left: 10px;
+    width: 300px;
+    height: 150px;
+    overflow-y: hidden;
+    display: flex;
+    flex-direction: column-reverse; /* Newest at bottom visually if we append, but we prepend in JS */
+    pointer-events: none;
+    text-shadow: 1px 1px 0 #000;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.log-entry {
+    padding: 2px 0;
+    animation: fadeOut 10s forwards;
+}
+
+#settings-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 250px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 2px solid #666;
+    padding: 20px;
+    z-index: 200;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+    box-shadow: 0 0 20px rgba(0,0,0,0.9);
+}
+
+#settings-modal h2 {
+    margin-top: 0;
+    color: #FFD700;
+}
 }
