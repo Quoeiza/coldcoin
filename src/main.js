@@ -1262,8 +1262,9 @@ class Game {
 
         // Client Reconciliation: Check for drift
         if (!this.state.isHost && this.state.connected) {
-            const interpolated = this.syncManager.getInterpolatedState(Date.now());
-            const serverPos = interpolated.entities.get(this.state.myId);
+            // Use LATEST state for self-check to minimize delay-induced drift
+            const latestState = this.syncManager.getLatestState();
+            const serverPos = latestState ? latestState.entities.get(this.state.myId) : null;
             const localPos = this.gridSystem.entities.get(this.state.myId);
             
             if (serverPos) {
@@ -1282,7 +1283,9 @@ class Game {
                 } else {
                     const dist = Math.abs(serverPos.x - localPos.x) + Math.abs(serverPos.y - localPos.y);
                     // If drift is too large (e.g. rejected move or lag spike), snap to server
-                    if (dist > 2.0) {
+                    // Increased threshold to 5.0 to prevent snapping during rapid/diagonal movement
+                    if (dist > 5.0) {
+                        console.warn("Reconciling position. Dist:", dist);
                         this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
                     }
                 }

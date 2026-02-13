@@ -138,6 +138,11 @@ export default class SyncManager {
         };
     }
 
+    getLatestState() {
+        if (this.snapshotBuffer.length === 0) return null;
+        return this.convertSnapshotToState(this.snapshotBuffer[this.snapshotBuffer.length - 1]);
+    }
+
     convertSnapshotToState(snapshot) {
         return {
             entities: new Map(snapshot.entities),
