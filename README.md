@@ -34,7 +34,11 @@
 *   **Networking:** PeerJS (WebRTC)
 *   **Styling:** CSS3
 
-## 🚀 How to Run
+## 🚀 How to Play
+
+1.  **Visit:** https://quoeiza.github.io/dungextract/
+
+## 🚀 How to Run Locally
 
 1.  **Clone the repository:**
     ```bash
