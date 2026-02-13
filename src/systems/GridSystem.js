@@ -260,4 +260,44 @@ export default class GridSystem {
         this.setTile(pos.x, pos.y, 9); // 9 = Extraction Zone
         return pos;
     }
+
+    populate(combatSystem, lootSystem, config) {
+        let validTiles = this.getValidSpawnLocations();
+        // Fisher-Yates shuffle to randomize spawn order
+        for (let i = validTiles.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [validTiles[i], validTiles[j]] = [validTiles[j], validTiles[i]];
+        }
+
+        // Spawn Enemies
+        const enemyTypes = Object.keys(config.enemies || {});
+        const enemyCount = 15; 
+        
+        for (let i = 0; i < enemyCount; i++) {
+            if (validTiles.length === 0 || enemyTypes.length === 0) break;
+            const pos = validTiles.pop();
+            const type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+            const id = `enemy_${Date.now()}_${i}`;
+            this.addEntity(id, pos.x, pos.y);
+            combatSystem.registerEntity(id, type, false);
+        }
+
+        // Spawn Loot
+        const chestLocs = this.getChestSpawnLocations();
+        // Shuffle chest locations
+        for (let i = chestLocs.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [chestLocs[i], chestLocs[j]] = [chestLocs[j], chestLocs[i]];
+        }
+
+        const lootTable = config.items.loot_table_tier_1 || [];
+        const lootCount = 10;
+        
+        for (let i = 0; i < lootCount; i++) {
+            if (chestLocs.length === 0 || lootTable.length === 0) break;
+            const pos = chestLocs.pop();
+            const entry = lootTable[Math.floor(Math.random() * lootTable.length)];
+            lootSystem.spawnLoot(pos.x, pos.y, entry.itemId, 1, 'chest', Math.floor(Math.random() * 11) + 5); // 5-15 gold
+        }
+    }
 }

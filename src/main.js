@@ -710,55 +710,13 @@ class Game {
         this.state.isHost = true;
         this.state.connected = true;
         this.gridSystem.initializeDungeon();
-        this.populateDungeon();
+        this.gridSystem.populate(this.combatSystem, this.lootSystem, this.config);
         
         // Spawn Host
         const spawn = this.gridSystem.getSpawnPoint();
         this.gridSystem.addEntity(id, spawn.x, spawn.y);
         this.combatSystem.registerEntity(id, 'player', true, this.playerData.class, this.playerData.name);
         this.state.gameTime = this.config.global.extractionTimeSeconds || 600;
-    }
-
-    populateDungeon() {
-        let validTiles = this.gridSystem.getValidSpawnLocations();
-        // Fisher-Yates shuffle to randomize spawn order
-        for (let i = validTiles.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [validTiles[i], validTiles[j]] = [validTiles[j], validTiles[i]];
-        }
-
-        // Spawn Enemies
-        const enemyTypes = Object.keys(this.config.enemies || {});
-        const enemyCount = 15; 
-        
-        for (let i = 0; i < enemyCount; i++) {
-            if (validTiles.length === 0 || enemyTypes.length === 0) break;
-            const pos = validTiles.pop();
-            const type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
-            const id = `enemy_${Date.now()}_${i}`;
-            this.gridSystem.addEntity(id, pos.x, pos.y);
-            this.combatSystem.registerEntity(id, type, false);
-        }
-
-        // Spawn Loot
-        // Use specific chest locations (corners) to avoid blocking corridors
-        const chestLocs = this.gridSystem.getChestSpawnLocations();
-        // Shuffle chest locations
-        for (let i = chestLocs.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [chestLocs[i], chestLocs[j]] = [chestLocs[j], chestLocs[i]];
-        }
-
-        const lootTable = this.config.items.loot_table_tier_1 || [];
-        const lootCount = 10;
-        
-        for (let i = 0; i < lootCount; i++) {
-            if (chestLocs.length === 0 || lootTable.length === 0) break;
-            const pos = chestLocs.pop();
-            const entry = lootTable[Math.floor(Math.random() * lootTable.length)];
-            this.lootSystem.spawnLoot(pos.x, pos.y, entry.itemId, 1, 'chest', Math.floor(Math.random() * 11) + 5); // 5-15 gold
-            // Note: We don't remove from validTiles here as chests are separate, but monsters might spawn on top. Acceptable for now.
-        }
     }
 
     handleInput(intent) {
