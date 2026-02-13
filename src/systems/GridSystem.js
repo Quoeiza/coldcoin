@@ -6,7 +6,7 @@ export default class GridSystem {
         this.grid = []; // 0: Floor, 1: Wall
         this.torches = []; // Array of {x, y}
         this.entities = new Map(); // Map<EntityID, {x, y, facing: {x, y}}>
-        this.spatialMap = new Map(); // Map<"x,y", EntityID> - Optimization for O(1) lookups
+        this.spatialMap = new Map(); // Map<int, EntityID> - Optimization for O(1) lookups
     }
 
     initializeDungeon() {
@@ -198,29 +198,76 @@ export default class GridSystem {
         return { success: false, collision: 'wall' };
     }
 
+    getKey(x, y) {
+        // Integer key optimization to reduce GC pressure from string generation
+        return (Math.round(y) * this.width) + Math.round(x);
+    }
+
     updateSpatialMap(id, oldX, oldY, newX, newY) {
-        this.spatialMap.delete(`${oldX},${oldY}`);
-        this.spatialMap.set(`${newX},${newY}`, id);
+        this.spatialMap.delete(this.getKey(oldX, oldY));
+        this.spatialMap.set(this.getKey(newX, newY), id);
     }
 
     getEntityAt(x, y) {
-        return this.spatialMap.get(`${x},${y}`) || null;
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) return null;
+        return this.spatialMap.get(this.getKey(x, y)) || null;
     }
 
     addEntity(id, x, y) {
         this.entities.set(id, { x, y, facing: { x: 0, y: 1 } });
-        this.spatialMap.set(`${x},${y}`, id);
+        this.spatialMap.set(this.getKey(x, y), id);
     }
 
     removeEntity(id) {
         const pos = this.entities.get(id);
         if (pos) {
-            const key = `${pos.x},${pos.y}`;
+            const key = this.getKey(pos.x, pos.y);
             if (this.spatialMap.get(key) === id) {
                 this.spatialMap.delete(key);
             }
         }
         this.entities.delete(id);
+    }
+
+    syncRemoteEntities(remoteEntities, localId) {
+        // Track entities to remove (present locally but missing from server)
+        const toRemove = new Set();
+        for (const id of this.entities.keys()) {
+            if (id !== localId) toRemove.add(id);
+        }
+
+        for (const [id, data] of remoteEntities) {
+            if (id === localId) continue; // Do not overwrite local player prediction
+
+            toRemove.delete(id); // Entity exists on server, keep it
+
+            const current = this.entities.get(id);
+            // Update only if position changed (optimization)
+            if (!current || current.x !== data.x || current.y !== data.y) {
+                if (current) {
+                    // Clean up old spatial position
+                    const oldKey = this.getKey(current.x, current.y);
+                    if (this.spatialMap.get(oldKey) === id) {
+                        this.spatialMap.delete(oldKey);
+                    }
+                }
+                
+                // Set new state
+                const entity = current || { facing: {x:0, y:1} };
+                entity.x = data.x;
+                entity.y = data.y;
+                entity.facing = data.facing || entity.facing;
+                entity.invisible = data.invisible;
+                
+                this.entities.set(id, entity);
+                this.spatialMap.set(this.getKey(data.x, data.y), id);
+            }
+        }
+
+        // Remove stale entities
+        for (const id of toRemove) {
+            this.removeEntity(id);
+        }
     }
 
     getValidSpawnLocations() {

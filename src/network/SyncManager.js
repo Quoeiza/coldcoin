@@ -8,7 +8,7 @@ export default class SyncManager {
         this.timeOffset = null; // Server Time - Client Time
     }
 
-    serializeState(gridSystem, combatSystem, lootSystem, gameTime) {
+    serializeState(gridSystem, combatSystem, lootSystem, projectiles, gameTime) {
         // Create a lightweight snapshot of the game state
         const entities = [];
         for (const [id, pos] of gridSystem.entities) {
@@ -30,6 +30,7 @@ export default class SyncManager {
             t: Date.now(),
             entities: entities,
             loot: Array.from(lootSystem.worldLoot.entries()),
+            projectiles: projectiles || [],
             gameTime: gameTime,
         };
     }
@@ -54,7 +55,7 @@ export default class SyncManager {
 
     getInterpolatedState(clientNow) {
         // If we haven't synced time yet, we can't interpolate correctly
-        if (this.timeOffset === null) return { entities: new Map(), loot: new Map(), gameTime: 0 };
+        if (this.timeOffset === null) return { entities: new Map(), loot: new Map(), projectiles: [], gameTime: 0 };
 
         const renderTime = (clientNow + this.timeOffset) - this.interpolationDelay;
 
@@ -77,7 +78,7 @@ export default class SyncManager {
                 const latest = this.snapshotBuffer[this.snapshotBuffer.length - 1];
                 return this.convertSnapshotToState(latest);
             }
-            return { entities: new Map(), loot: new Map(), gameTime: 0 }; 
+            return { entities: new Map(), loot: new Map(), projectiles: [], gameTime: 0 }; 
         }
 
         // Edge Case: We are behind the oldest snapshot (Shouldn't happen with correct buffer management)
@@ -97,6 +98,7 @@ export default class SyncManager {
 
         const interpolatedEntities = new Map();
         const lootMap = new Map(next.loot || []); // Loot uses most recent state (no lerp needed)
+        const interpolatedProjectiles = [];
 
         // Interpolate positions
         const nextEntitiesMap = new Map(next.entities);
@@ -131,9 +133,30 @@ export default class SyncManager {
             }
         }
 
+        // Interpolate Projectiles
+        // We match projectiles by ID (assuming projectiles have IDs now)
+        // If no ID, we can't interpolate, so we just take 'next'
+        const prevProjs = prev.projectiles || [];
+        const nextProjs = next.projectiles || [];
+        
+        nextProjs.forEach(np => {
+            const pp = prevProjs.find(p => p.id === np.id);
+            if (pp) {
+                interpolatedProjectiles.push({
+                    ...np,
+                    x: pp.x + (np.x - pp.x) * ratio,
+                    y: pp.y + (np.y - pp.y) * ratio
+                });
+            } else {
+                // New projectile, just render at current pos
+                interpolatedProjectiles.push(np);
+            }
+        });
+
         return { 
             entities: interpolatedEntities, 
             loot: lootMap, 
+            projectiles: interpolatedProjectiles,
             gameTime: next.gameTime 
         };
     }
@@ -147,6 +170,7 @@ export default class SyncManager {
         return {
             entities: new Map(snapshot.entities),
             loot: new Map(snapshot.loot || []),
+            projectiles: snapshot.projectiles || [],
             gameTime: snapshot.gameTime
         };
     }

@@ -711,7 +711,11 @@ class Game {
                 }
                 
                 if (data.type === 'SPAWN_PROJECTILE') {
-                    this.state.projectiles.push(data.payload);
+                    // We use this event primarily for Audio now.
+                    // Visuals are handled via Snapshot Sync.
+                    // this.state.projectiles.push(data.payload); 
+                    // ^ Removed to prevent duplication with SyncManager
+                    this.audioSystem.play('attack');
                 }
 
                 if (data.type === 'UPDATE_GOLD') {
@@ -809,6 +813,8 @@ class Game {
     }
 
     processPlayerInput(entityId, intent) {
+        if (!intent || !intent.type) return; // Safeguard against malformed inputs
+
         // Host-side Cooldown Enforcement
         let stats = this.combatSystem.getStats(entityId);
 
@@ -1037,7 +1043,18 @@ class Game {
                 const dx = targetPos.x - attackerPos.x;
                 const dy = targetPos.y - attackerPos.y;
                 const mag = Math.sqrt(dx*dx + dy*dy);
-                const proj = { x: attackerPos.x, y: attackerPos.y, vx: dx/mag, vy: dy/mag, speed: 15, ownerId: attackerId, damage: config.damage };
+                
+                const proj = { 
+                    id: `proj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                    x: attackerPos.x, 
+                    y: attackerPos.y, 
+                    vx: dx/mag, 
+                    vy: dy/mag, 
+                    speed: 15, 
+                    ownerId: attackerId, 
+                    damage: config.damage 
+                };
+                
                 this.state.projectiles.push(proj);
                 this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
                 this.audioSystem.play('attack');
@@ -1262,12 +1279,27 @@ class Game {
 
         // Client Reconciliation: Check for drift
         if (!this.state.isHost && this.state.connected) {
-            // Use LATEST state for self-check to minimize delay-induced drift
+            // 1. Get Latest Server State
             const latestState = this.syncManager.getLatestState();
-            const serverPos = latestState ? latestState.entities.get(this.state.myId) : null;
-            const localPos = this.gridSystem.entities.get(this.state.myId);
             
-            if (serverPos) {
+            if (latestState) {
+                // 2. Sync Logic Layer (Collisions & Targeting)
+                this.gridSystem.syncRemoteEntities(latestState.entities, this.state.myId);
+                
+                // Sync Loot for collision logic
+                this.lootSystem.syncLoot(latestState.loot);
+                
+                for (const [id, data] of latestState.entities) {
+                    if (id !== this.state.myId) {
+                        this.combatSystem.syncRemoteStats(id, data);
+                    }
+                }
+
+                // 3. Reconcile Self (Drift Correction)
+                const serverPos = latestState.entities.get(this.state.myId);
+                const localPos = this.gridSystem.entities.get(this.state.myId);
+            
+                if (serverPos) {
                 // Prevent re-adding human entity if we are in the process of extracting locally
                 // until the server confirms we are a monster.
                 if (this.state.isExtracting && serverPos.team !== 'monster') {
@@ -1289,30 +1321,33 @@ class Game {
                         this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
                     }
                 }
+                }
             }
         }
 
-        // Update Projectiles
-        const projSpeed = dt / 1000;
-        for (let i = this.state.projectiles.length - 1; i >= 0; i--) {
-            const p = this.state.projectiles[i];
-            p.x += p.vx * p.speed * projSpeed;
-            p.y += p.vy * p.speed * projSpeed;
+        // Update Projectiles (Host Only Simulation)
+        if (this.state.isHost) {
+            const projSpeed = dt / 1000;
+            for (let i = this.state.projectiles.length - 1; i >= 0; i--) {
+                const p = this.state.projectiles[i];
+                p.x += p.vx * p.speed * projSpeed;
+                p.y += p.vy * p.speed * projSpeed;
 
-            // Collision Check (Host Authority for Damage, everyone for Wall destroy)
-            const gridX = Math.round(p.x);
-            const gridY = Math.round(p.y);
+                // Collision Check (Host Authority for Damage, everyone for Wall destroy)
+                const gridX = Math.round(p.x);
+                const gridY = Math.round(p.y);
 
-            if (!this.gridSystem.isWalkable(gridX, gridY)) {
-                this.state.projectiles.splice(i, 1); // Hit Wall
-                continue;
-            }
+                if (!this.gridSystem.isWalkable(gridX, gridY)) {
+                    this.state.projectiles.splice(i, 1); // Hit Wall
+                    continue;
+                }
 
-            if (this.state.isHost) {
-                const hitId = this.gridSystem.getEntityAt(gridX, gridY);
-                if (hitId && hitId !== p.ownerId) {
-                    this.combatSystem.applyDamage(hitId, p.damage, p.ownerId);
-                    this.state.projectiles.splice(i, 1);
+                if (this.state.isHost) {
+                    const hitId = this.gridSystem.getEntityAt(gridX, gridY);
+                    if (hitId && hitId !== p.ownerId) {
+                        this.combatSystem.applyDamage(hitId, p.damage, p.ownerId);
+                        this.state.projectiles.splice(i, 1);
+                    }
                 }
             }
         }
@@ -1360,6 +1395,7 @@ class Game {
                 this.gridSystem, 
                 this.combatSystem, 
                 this.lootSystem, 
+                this.state.projectiles,
                 this.state.gameTime
             );
             this.peerClient.send({ type: 'SNAPSHOT', payload: snapshot });
@@ -1374,6 +1410,7 @@ class Game {
             ? { 
                 entities: this.gridSystem.entities, 
                 loot: this.lootSystem.worldLoot, 
+                projectiles: this.state.projectiles,
                 gameTime: this.state.gameTime 
               }
             : this.syncManager.getInterpolatedState(Date.now());
@@ -1429,7 +1466,7 @@ class Game {
             this.gridSystem.grid, 
             state.entities,
             state.loot,
-            this.state.projectiles,
+            state.projectiles,
             this.state.interaction,
             this.state.myId
         );

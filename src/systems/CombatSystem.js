@@ -96,7 +96,7 @@ export default class CombatSystem extends EventEmitter {
         return result;
     }
 
-    applyDamage(targetId, amount, sourceId, options = {}) {
+    applyDamage(targetId, amount, sourceId) {
         const targetStats = this.stats.get(targetId);
         const sourceStats = this.stats.get(sourceId);
         if (!targetStats) return;
@@ -118,7 +118,7 @@ export default class CombatSystem extends EventEmitter {
         if (sourceStats && sourceStats.invisible) sourceStats.invisible = false;
 
         targetStats.hp -= finalDamage;
-        this.emit('damage', { targetId, amount: finalDamage, sourceId, currentHp: targetStats.hp, options });
+        this.emit('damage', { targetId, amount: finalDamage, sourceId, currentHp: targetStats.hp });
 
         if (targetStats.hp <= 0) {
             this.handleDeath(targetId, sourceId);
@@ -133,5 +133,26 @@ export default class CombatSystem extends EventEmitter {
 
     getStats(id) {
         return this.stats.get(id);
+    }
+
+    syncRemoteStats(id, data) {
+        // Populate local cache with server data for targeting checks
+        let stats = this.stats.get(id);
+        if (!stats) {
+            stats = { 
+                hp: data.hp, 
+                maxHp: data.maxHp, 
+                team: data.team, 
+                type: data.type,
+                isPlayer: data.type === 'player',
+                invisible: data.invisible
+            };
+            this.stats.set(id, stats);
+        } else {
+            stats.hp = data.hp;
+            stats.maxHp = data.maxHp;
+            stats.team = data.team;
+            stats.invisible = data.invisible;
+        }
     }
 }

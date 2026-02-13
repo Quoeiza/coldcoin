@@ -12,55 +12,6 @@ export default class LootSystem {
         return id;
     }
 
-    createLootBag(x, y, items, gold = 0) {
-        if ((!items || items.length === 0) && gold === 0) return null;
-        const id = `loot_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        this.worldLoot.set(id, { id, itemId: 'bag', count: 1, x, y, opened: false, type: 'bag', gold, contents: items });
-        return id;
-    }
-
-    spawnRandomLoot(x, y, tier = 1) {
-        const itemId = this.rollLoot(tier);
-        if (itemId) {
-            // Higher tiers have more gold
-            const goldBase = tier * 10;
-            const gold = Math.floor(Math.random() * goldBase) + goldBase;
-            return this.spawnLoot(x, y, itemId, 1, 'chest', gold);
-        }
-        return null;
-    }
-
-    rollLoot(tier) {
-        const tableKey = `tier_${tier}`;
-        const table = this.itemsConfig.loot_tables ? this.itemsConfig.loot_tables[tableKey] : null;
-        
-        if (!table || table.length === 0) return 'potion_health'; // Fallback
-
-        const totalWeight = table.reduce((sum, item) => sum + item.weight, 0);
-        let random = Math.random() * totalWeight;
-        
-        for (const item of table) {
-            if (random < item.weight) {
-                return item.itemId;
-            }
-            random -= item.weight;
-        }
-        return table[0].itemId;
-    }
-
-    getLootTier(x, y, width, height) {
-        // Calculate distance from center
-        const cx = width / 2;
-        const cy = height / 2;
-        const dist = Math.sqrt(Math.pow(x - cx, 2) + Math.pow(y - cy, 2));
-        const maxDist = Math.sqrt(Math.pow(cx, 2) + Math.pow(cy, 2));
-
-        // Closer to center = Higher Tier
-        if (dist < maxDist * 0.3) return 3; // Inner 30%
-        if (dist < maxDist * 0.6) return 2; // Inner 60%
-        return 1; // Outer edges
-    }
-
     spawnDrop(x, y, itemId, count = 1) {
         return this.spawnLoot(x, y, itemId, count, 'bag');
     }
@@ -104,16 +55,8 @@ export default class LootSystem {
         if (!loot) return null;
         
         this.worldLoot.delete(lootId);
-        
-        if (loot.contents && Array.isArray(loot.contents)) {
-            loot.contents.forEach(item => {
-                this.addItemToEntity(entityId, item.itemId, item.count);
-            });
-            return { contents: loot.contents, gold: loot.gold || 0 };
-        } else {
-            this.addItemToEntity(entityId, loot.itemId, loot.count || 1);
-            return { itemId: loot.itemId, count: loot.count || 1, gold: loot.gold || 0 };
-        }
+        this.addItemToEntity(entityId, loot.itemId, loot.count || 1);
+        return { itemId: loot.itemId, count: loot.count || 1, gold: loot.gold || 0 };
     }
 
     addItemToEntity(entityId, itemId, count) {
@@ -233,14 +176,6 @@ export default class LootSystem {
         return true;
     }
 
-    removeEquipment(entityId, slot) {
-        const equip = this.getEquipment(entityId);
-        if (!equip[slot]) return null;
-        const item = equip[slot];
-        equip[slot] = null;
-        return item;
-    }
-
     removeItemFromInventory(entityId, itemId) {
         const inv = this.getInventory(entityId);
         const idx = inv.findIndex(i => i.itemId === itemId);
@@ -272,22 +207,8 @@ export default class LootSystem {
         return { damage: 0, defense: 0 }; 
     }
 
-    getAllItems(entityId) {
-        const items = [];
-        const inv = this.getInventory(entityId);
-        const equip = this.getEquipment(entityId);
-
-        // Inventory
-        items.push(...inv);
-
-        // Equipment
-        Object.values(equip).forEach(item => {
-            if (item) items.push(item);
-        });
-
-        // Clear
-        this.inventories.set(entityId, []);
-        this.equipment.set(entityId, { weapon: null, armor: null, quick1: null, quick2: null, quick3: null });
-        return items;
+    syncLoot(remoteLootMap) {
+        // Update local loot state to match server (crucial for collision logic)
+        this.worldLoot = new Map(remoteLootMap);
     }
 }
