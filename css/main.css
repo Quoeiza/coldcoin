@@ -134,7 +134,7 @@ button {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 300px;
+    width: 420px; /* Increased width for larger slots */
     background: rgba(20, 20, 20, 0.95);
     border: 2px solid #444;
     padding: 15px;
@@ -176,8 +176,8 @@ button {
 }
 
 .equip-slot {
-    width: 48px;
-    height: 48px;
+    width: 72px; /* Increased from 48px */
+    height: 72px;
     background: #222;
     border: 1px dashed #555;
     display: flex;
@@ -193,8 +193,8 @@ button {
 }
 
 .inv-slot {
-    width: 48px;
-    height: 48px;
+    width: 72px; /* Increased from 48px */
+    height: 72px;
     background: #2a2a2a;
     border: 1px solid #333;
     display: flex;
@@ -208,8 +208,8 @@ button {
 }
 
 .item-icon {
-    width: 32px;
-    height: 32px;
+    width: 64px; /* Increased from 32px to match tile size */
+    height: 64px;
     background-color: #555; /* Placeholder if no sprite */
     border-radius: 4px;
     pointer-events: none; /* Let drag events bubble from slot */
@@ -220,7 +220,7 @@ button {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 250px;
+    width: 400px; /* Increased width */
     background: rgba(20, 20, 20, 0.95);
     border: 2px solid #666;
     padding: 15px;
@@ -265,8 +265,8 @@ button {
 }
 
 .quick-slot-hud-item {
-    width: 40px;
-    height: 40px;
+    width: 64px; /* Increased from 40px */
+    height: 64px;
     background: rgba(0,0,0,0.5);
     border: 1px solid #444;
     display: flex;
@@ -314,26 +314,6 @@ button {
 .highlight {
     color: #FFD700;
     font-weight: bold;
-}
-
-#combat-log {
-    position: absolute;
-    bottom: 100px; /* Above mobile controls */
-    left: 10px;
-    width: 300px;
-    height: 150px;
-    overflow-y: hidden;
-    display: flex;
-    flex-direction: column-reverse; /* Newest at bottom visually if we append, but we prepend in JS */
-    pointer-events: none;
-    text-shadow: 1px 1px 0 #000;
-    font-size: 12px;
-    opacity: 0.8;
-}
-
-.log-entry {
-    padding: 2px 0;
-    animation: fadeOut 10s forwards;
 }
 
 #settings-modal {

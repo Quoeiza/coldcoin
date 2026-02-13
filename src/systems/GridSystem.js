@@ -185,6 +185,8 @@ export default class GridSystem {
     }
 
     isWalkable(x, y) {
+        x = Math.round(x);
+        y = Math.round(y);
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
         const t = this.grid[y][x];
         return t === 0 || t === 2 || t === 3 || t === 4 || t === 9;

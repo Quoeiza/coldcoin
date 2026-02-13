@@ -24,7 +24,8 @@ class Game {
             projectiles: [],
             interaction: null, // { type, targetId, startTime, duration, x, y }
             lavaTimer: 0,
-            handshakeInterval: null
+            handshakeInterval: null,
+            isExtracting: false
         };
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
@@ -46,15 +47,16 @@ class Game {
         this.gridSystem = new GridSystem(
             global.dungeonWidth || 50, 
             global.dungeonHeight || 50, 
-            global.tileSize || 32
+            global.tileSize || 64
         );
         
         this.renderSystem = new RenderSystem(
             'game-canvas', 
             window.innerWidth, 
             window.innerHeight, 
-            global.tileSize || 32
+            global.tileSize || 64
         );
+        this.renderSystem.setAssetLoader(this.assetLoader);
 
         this.combatSystem = new CombatSystem(configs.enemies);
         this.lootSystem = new LootSystem(configs.items);
@@ -69,6 +71,19 @@ class Game {
         const hostId = urlParams.get('join');
         if (hostId) {
             document.getElementById('room-code-input').value = hostId;
+        }
+    }
+
+    respawnAsMonster(entityId) {
+        const types = Object.keys(this.config.enemies);
+        const type = types[Math.floor(Math.random() * types.length)];
+        const spawn = this.gridSystem.getSpawnPoint(false);
+        
+        this.gridSystem.addEntity(entityId, spawn.x, spawn.y);
+        this.combatSystem.registerEntity(entityId, type, true); // isPlayer=true, team=monster
+        
+        if (this.state.isHost) {
+             this.peerClient.send({ type: 'RESPAWN_MONSTER', payload: { id: entityId, type } });
         }
     }
 
@@ -151,7 +166,7 @@ class Game {
 
     setupUI() {
         // Reveal HUD elements
-        ['room-code-display', 'kill-feed', 'combat-log', 'stats-bar'].forEach(id => {
+        ['room-code-display', 'kill-feed', 'stats-bar'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.classList.remove('hidden');
         });
@@ -456,15 +471,6 @@ class Game {
         setTimeout(() => div.remove(), 5000);
     }
 
-    addLogMessage(msg, color = '#ddd') {
-        const log = document.getElementById('combat-log');
-        const div = document.createElement('div');
-        div.className = 'log-entry';
-        div.style.color = color;
-        div.innerText = msg;
-        log.prepend(div); // Newest on top (or bottom depending on preference, usually bottom for chat, top for feed)
-    }
-
     processLootInteraction(entityId, loot) {
         let result = null;
         if (loot.type === 'chest') {
@@ -493,8 +499,10 @@ class Game {
                 this.renderInventory();
                 this.updateQuickSlotUI();
                 const goldText = result.gold > 0 ? ` + ${result.gold}g` : '';
-                this.showNotification(`Looted: ${this.getItemName(result.itemId)}${goldText}`);
-                this.addLogMessage(`You found ${this.getItemName(result.itemId)}`, '#FFD700');
+                const itemName = this.getItemName(result.itemId);
+                this.showNotification(`Looted: ${itemName}${goldText}`);
+                this.renderSystem.addFloatingText(this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y, `+${itemName}`, '#FFD700');
+                this.addKillFeed(`Looted ${itemName}${goldText}`);
             } else {
                 // Notify client
                 this.peerClient.send({ type: 'LOOT_SUCCESS', payload: { id: entityId } });
@@ -522,7 +530,7 @@ class Game {
         });
 
         // Combat Events (Local & Networked)
-        this.combatSystem.on('damage', ({ targetId, amount, currentHp, sourceId }) => {
+        this.combatSystem.on('damage', ({ targetId, amount, currentHp, sourceId, options }) => {
             // Update UI if it's me
             if (targetId === this.state.myId) {
                 const hpEl = document.getElementById('hp-val');
@@ -531,11 +539,27 @@ class Game {
                 this.audioSystem.play('hit'); 
             }
 
+            // Log significant damage events for local player
+            if (amount > 0 && (targetId === this.state.myId || sourceId === this.state.myId)) {
+                const tStats = this.combatSystem.getStats(targetId);
+                const sStats = sourceId ? this.combatSystem.getStats(sourceId) : null;
+                
+                const tName = targetId === this.state.myId ? "You" : (tStats ? (tStats.name || tStats.type) : "Unknown");
+                const sName = sourceId === this.state.myId ? "You" : (sStats ? (sStats.name || sStats.type) : "Environment");
+                
+                this.addKillFeed(`${sName} hit ${tName} for ${amount}`);
+            }
+
             // Floating Damage Text
             const pos = this.gridSystem.entities.get(targetId);
             if (pos) {
                 const color = amount > 0 ? '#ff4444' : '#44ff44';
-                const text = Math.abs(amount).toString();
+                let text = Math.abs(amount).toString();
+                
+                if (options && options.isCrit) {
+                    text += "!";
+                }
+
                 this.renderSystem.addFloatingText(pos.x, pos.y, text, color);
                 
                 // Broadcast to clients
@@ -586,10 +610,6 @@ class Game {
                     killMsg = `<span class="highlight">${victimName}</span> was eliminated by <span class="highlight">${killerName}</span>`;
                 }
 
-                if (killerId === this.state.myId) {
-                    this.addLogMessage(`You killed ${victimName}`, '#ff4444');
-                }
-
                 this.peerClient.send({ type: 'KILL_FEED', payload: { msg: killMsg } });
                 this.addKillFeed(killMsg);
 
@@ -620,12 +640,7 @@ class Game {
                 // 2. Monster Mechanic: Respawn Player as Monster
                 if (stats && stats.isPlayer) {
                     setTimeout(() => {
-                        const types = Object.keys(this.config.enemies);
-                        const type = types[Math.floor(Math.random() * types.length)];
-                        const spawn = this.gridSystem.getSpawnPoint(false);
-                        
-                        this.gridSystem.addEntity(entityId, spawn.x, spawn.y);
-                        this.combatSystem.registerEntity(entityId, type, true); // isPlayer=true preserves control, but sets team=monster
+                        this.respawnAsMonster(entityId);
                     }, 3000);
                 }
             }
@@ -678,6 +693,15 @@ class Game {
                     this.showGameOver(data.payload.message);
                 } else if (data.type === 'PLAYER_EXTRACTED') {
                     console.log(`Player ${data.payload.id} extracted!`);
+                } else if (data.type === 'PORTAL_SPAWN') {
+                    this.gridSystem.setTile(data.payload.x, data.payload.y, 9);
+                    this.showNotification("The Extraction Portal has opened!");
+                    this.audioSystem.play('pickup');
+                } else if (data.type === 'RESPAWN_MONSTER') {
+                    if (data.payload.id === this.state.myId) {
+                        this.showNotification(`Respawned as ${data.payload.type}! Hunt them down.`);
+                        this.state.isExtracting = false;
+                    }
                 } else if (data.type === 'EFFECT') {
                     this.renderSystem.addEffect(data.payload.x, data.payload.y, data.payload.type);
                 }
@@ -837,6 +861,24 @@ class Game {
 
             const result = this.gridSystem.moveEntity(entityId, intent.direction.x, intent.direction.y);
             
+            // Wall Sliding Logic: If diagonal move hits wall, try cardinal components
+            if (!result.success && result.collision === 'wall') {
+                if (intent.direction.x !== 0 && intent.direction.y !== 0) {
+                    // Try sliding along X
+                    const resX = this.gridSystem.moveEntity(entityId, intent.direction.x, 0);
+                    if (resX.success) {
+                        // Mutate result to the successful slide
+                        Object.assign(result, resX);
+                    } else {
+                        // Try sliding along Y
+                        const resY = this.gridSystem.moveEntity(entityId, 0, intent.direction.y);
+                        if (resY.success) {
+                            Object.assign(result, resY);
+                        }
+                    }
+                }
+            }
+
             if (result.success) {
                 if (entityId === this.state.myId) {
                     this.audioSystem.play('step');
@@ -845,10 +887,14 @@ class Game {
                 
                 // Check for Extraction
                 const pos = this.gridSystem.entities.get(entityId);
-                if (pos && this.gridSystem.grid[pos.y][pos.x] === 9) {
+                // Round coordinates to ensure valid grid access (prevent float indexing)
+                if (pos && this.gridSystem.grid[Math.round(pos.y)][Math.round(pos.x)] === 9) {
                     this.handleExtraction(entityId);
                 }
             } else if (result.collision && result.collision !== 'wall') {
+                // Trigger Bump for entity collision too
+                this.renderSystem.triggerBump(entityId, intent.direction);
+
                 // Bump Attack
                 // Check Friendly Fire for Monsters
                 const attackerStats = this.combatSystem.getStats(entityId);
@@ -861,6 +907,12 @@ class Game {
 
                 if (!friendlyFire) {
                     this.performAttack(entityId, result.collision);
+                }
+            } else if (result.collision === 'wall') {
+                // Trigger Bump for wall
+                this.renderSystem.triggerBump(entityId, intent.direction);
+                if (entityId === this.state.myId) {
+                    this.audioSystem.play('bump');
                 }
             }
         }
@@ -931,13 +983,14 @@ class Game {
         if (intent.type === 'USE_ITEM') {
             const effect = this.lootSystem.consumeItem(entityId, intent.slot);
             if (effect) {
+                this.addKillFeed(`Used ${effect.name}`);
                 if (effect.effect === 'heal') {
                     const stats = this.combatSystem.getStats(entityId);
                     if (stats) {
                         stats.hp = Math.min(stats.maxHp, stats.hp + effect.value);
                         // Emit damage event with negative amount to signal heal? Or just update HP.
-                        // Let's emit damage event with 0 damage but updated HP to trigger UI sync
-                        this.combatSystem.emit('damage', { targetId: entityId, amount: 0, sourceId: entityId, currentHp: stats.hp });
+                        // Emit negative amount to trigger green floating text
+                        this.combatSystem.emit('damage', { targetId: entityId, amount: -effect.value, sourceId: entityId, currentHp: stats.hp });
                         this.audioSystem.play('pickup'); // Use pickup sound for now
                         this.renderInventory();
                         this.updateQuickSlotUI();
@@ -950,6 +1003,7 @@ class Game {
             const result = this.combatSystem.useAbility(entityId);
             if (result) {
                 this.showNotification(`Used ${result.ability}`);
+                this.addKillFeed(`Used ${result.ability}`);
                 // Sync visual effects if needed
                 if (result.effect === 'stealth') {
                     const pos = this.gridSystem.entities.get(entityId);
@@ -957,7 +1011,7 @@ class Game {
                     setTimeout(() => { if(pos) pos.invisible = false; }, result.duration);
                 }
                 if (result.effect === 'heal') {
-                    this.combatSystem.emit('damage', { targetId: entityId, amount: 0, sourceId: entityId, currentHp: this.combatSystem.getStats(entityId).hp });
+                    this.combatSystem.emit('damage', { targetId: entityId, amount: -result.value, sourceId: entityId, currentHp: this.combatSystem.getStats(entityId).hp });
                 }
             }
         }
@@ -997,8 +1051,13 @@ class Game {
         this.audioSystem.play('attack');
 
         const stats = this.combatSystem.getStats(attackerId);
-        const damage = stats ? stats.damage : 5;
-        this.combatSystem.applyDamage(targetId, damage, attackerId);
+        let damage = stats ? stats.damage : 5;
+        
+        // Crit Logic (15% Chance)
+        const isCrit = Math.random() < 0.15;
+        if (isCrit) damage = Math.floor(damage * 1.5);
+
+        this.combatSystem.applyDamage(targetId, damage, attackerId, { isCrit });
     }
 
     handleExtraction(entityId) {
@@ -1008,8 +1067,11 @@ class Game {
         const name = stats ? (stats.name || entityId) : entityId;
 
         if (entityId === this.state.myId) {
-            const currentGold = this.playerData.gold + 100; // Flat reward for now
-            this.database.savePlayer({ gold: currentGold, extractions: (this.playerData.extractions || 0) + 1 });
+            this.playerData.gold += 100; // Flat reward for now
+            this.state.isExtracting = true;
+            this.playerData.extractions = (this.playerData.extractions || 0) + 1;
+            this.database.savePlayer({ gold: this.playerData.gold, extractions: this.playerData.extractions });
+            this.updateGoldUI();
         }
         
         // 2. Remove from World
@@ -1017,9 +1079,20 @@ class Game {
         this.combatSystem.stats.delete(entityId);
 
         // 3. Notify
-        this.peerClient.send({ type: 'PLAYER_EXTRACTED', payload: { id: entityId } });
-        this.peerClient.send({ type: 'KILL_FEED', payload: { msg: `<span class="highlight">${name}</span> escaped the dungeon!` } });
-        if (entityId === this.state.myId) this.showGameOver("EXTRACTED! Loot Secured.");
+        if (this.state.isHost) {
+            this.peerClient.send({ type: 'PLAYER_EXTRACTED', payload: { id: entityId } });
+            this.peerClient.send({ type: 'KILL_FEED', payload: { msg: `<span class="highlight">${name}</span> escaped the dungeon!` } });
+            this.addKillFeed(`<span class="highlight">${name}</span> escaped the dungeon!`);
+            
+            // Respawn as Monster
+            setTimeout(() => {
+                this.respawnAsMonster(entityId);
+            }, 3000);
+        }
+
+        if (entityId === this.state.myId) {
+            this.showNotification("EXTRACTED! Respawning as Monster...");
+        }
     }
 
     updateAI(dt) {
@@ -1160,10 +1233,8 @@ class Game {
             
             if (!this.state.extractionOpen && this.state.gameTime <= 60) {
                 this.state.extractionOpen = true;
-                this.gridSystem.spawnExtractionZone();
-                // Broadcast map update (simple way: resend INIT_WORLD or just let grid sync via snapshot if we synced grid... which we don't usually per frame)
-                // For this revision, we rely on the fact that we don't sync grid changes per frame.
-                this.peerClient.send({ type: 'INIT_WORLD', payload: { grid: this.gridSystem.grid, torches: this.gridSystem.torches } });
+                const pos = this.gridSystem.spawnExtractionZone();
+                this.peerClient.send({ type: 'PORTAL_SPAWN', payload: { x: pos.x, y: pos.y } });
             }
 
             if (this.state.gameTime <= 0) {
@@ -1190,11 +1261,25 @@ class Game {
             const serverPos = interpolated.entities.get(this.state.myId);
             const localPos = this.gridSystem.entities.get(this.state.myId);
             
-            if (serverPos && localPos) {
-                const dist = Math.abs(serverPos.x - localPos.x) + Math.abs(serverPos.y - localPos.y);
-                // If drift is too large (e.g. rejected move or lag spike), snap to server
-                if (dist > 2.0) {
-                    this.gridSystem.addEntity(this.state.myId, serverPos.x, serverPos.y);
+            if (serverPos) {
+                // Prevent re-adding human entity if we are in the process of extracting locally
+                // until the server confirms we are a monster.
+                if (this.state.isExtracting && serverPos.team !== 'monster') {
+                    return;
+                }
+                // If we are now a monster on server, clear extraction flag
+                if (serverPos.team === 'monster') this.state.isExtracting = false;
+
+                if (!localPos) {
+                    // Respawned on server, add locally
+                    // Round to integer to prevent float contamination from interpolation
+                    this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
+                } else {
+                    const dist = Math.abs(serverPos.x - localPos.x) + Math.abs(serverPos.y - localPos.y);
+                    // If drift is too large (e.g. rejected move or lag spike), snap to server
+                    if (dist > 2.0) {
+                        this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
+                    }
                 }
             }
         }

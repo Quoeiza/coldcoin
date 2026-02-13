@@ -1,8 +1,8 @@
 {
     "tickRate": 20,
     "globalCooldownMs": 250,
-    "tileSize": 32,
-    "extractionTimeSeconds": 900,
+    "tileSize": 64,
+    "extractionTimeSeconds": 90,
     "dungeonWidth": 200,
     "dungeonHeight": 200,
     "maxPlayers": 16

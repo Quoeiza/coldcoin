@@ -59,6 +59,9 @@ export default class AudioSystem {
             case 'death':
                 this.playTone(50 * variance, 'sawtooth', 0.5, 0.1);
                 break;
+            case 'bump':
+                this.playTone(80 * variance, 'triangle', 0.05, 0.1);
+                break;
         }
     }
 }

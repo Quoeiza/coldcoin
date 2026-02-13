@@ -96,7 +96,7 @@ export default class CombatSystem extends EventEmitter {
         return result;
     }
 
-    applyDamage(targetId, amount, sourceId) {
+    applyDamage(targetId, amount, sourceId, options = {}) {
         const targetStats = this.stats.get(targetId);
         const sourceStats = this.stats.get(sourceId);
         if (!targetStats) return;
@@ -118,7 +118,7 @@ export default class CombatSystem extends EventEmitter {
         if (sourceStats && sourceStats.invisible) sourceStats.invisible = false;
 
         targetStats.hp -= finalDamage;
-        this.emit('damage', { targetId, amount: finalDamage, sourceId, currentHp: targetStats.hp });
+        this.emit('damage', { targetId, amount: finalDamage, sourceId, currentHp: targetStats.hp, options });
 
         if (targetStats.hp <= 0) {
             this.handleDeath(targetId, sourceId);

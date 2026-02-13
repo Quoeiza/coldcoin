@@ -17,10 +17,22 @@ export default class AssetLoader {
     // For the early revision, we will generate placeholder graphics if files are missing
     // to ensure the game is playable immediately.
     async loadImages(imageLists) {
-        // In a real scenario, this would fetch blobs.
-        // Here we stub it to return success so the RenderSystem can use placeholders.
-        console.log("AssetLoader: Preloading images...", imageLists);
-        return Promise.resolve();
+        const promises = [];
+        for (const [name, src] of Object.entries(imageLists)) {
+            promises.push(new Promise((resolve) => {
+                const img = new Image();
+                img.src = src;
+                img.onload = () => {
+                    this.images[name] = img;
+                    resolve();
+                };
+                img.onerror = (e) => {
+                    console.warn(`Failed to load image: ${src}`, e);
+                    resolve(); // Resolve anyway to prevent blocking
+                };
+            }));
+        }
+        return Promise.all(promises);
     }
 
     getImage(name) {
@@ -32,6 +44,11 @@ export default class AssetLoader {
         const items = await this.loadConfig('./config/items.json');
         const enemies = await this.loadConfig('./config/enemies.json');
         const net = await this.loadConfig('./config/networking.json');
+        
+        await this.loadImages({
+            'knight': './assets/images/Knight.png'
+        });
+
         return { global, items, enemies, net };
     }
 }
