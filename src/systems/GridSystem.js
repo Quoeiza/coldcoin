@@ -15,99 +15,33 @@ export default class GridSystem {
         this.rooms = [];
         this.torches = [];
         this.spawnRooms = []; // Special rooms for player spawns
-
-        const rooms = [];
         this.spatialMap.clear();
         
-        // 2. BSP Dungeon Generation
-        // We split the map recursively to create a dense layout
-        const bspTree = this.splitContainer({ x: 1, y: 1, w: this.width - 2, h: this.height - 2 }, 8); // Depth 8 for high density
-        
-        // Extract leaves (rooms)
-        const leaves = this.getLeaves(bspTree);
-        
-        leaves.forEach(leaf => {
-            // Create a room inside the leaf with some padding
-            const padding = 2;
-            const roomW = Math.max(4, Math.floor(Math.random() * (leaf.w - padding * 2)) + 4);
-            const roomH = Math.max(4, Math.floor(Math.random() * (leaf.h - padding * 2)) + 4);
-            
-            // Center the room in the leaf roughly
-            const roomX = leaf.x + Math.floor((leaf.w - roomW) / 2);
-            const roomY = leaf.y + Math.floor((leaf.h - roomH) / 2);
+        // TEST MODE: Single Room (20x20) centered
+        const roomW = 20;
+        const roomH = 20;
+        const roomX = Math.floor((this.width - roomW) / 2);
+        const roomY = Math.floor((this.height - roomH) / 2);
 
-            const newRoom = { 
-                x: roomX, 
-                y: roomY, 
-                w: roomW, 
-                h: roomH, 
-                cx: roomX + Math.floor(roomW/2), 
-                cy: roomY + Math.floor(roomH/2) 
-            };
+        const room = {
+            x: roomX,
+            y: roomY,
+            w: roomW,
+            h: roomH,
+            cx: roomX + Math.floor(roomW/2),
+            cy: roomY + Math.floor(roomH/2),
+            isSpawn: true
+        };
 
-            this.createRoom(newRoom);
-            this.rooms.push(newRoom);
-            
-            // Store reference in leaf for connection
-            leaf.room = newRoom;
-        });
+        this.createRoom(room);
+        this.rooms.push(room);
+        this.spawnRooms.push(room);
 
-        // 3. Connect Rooms via BSP Tree
-        // Connect sibling nodes
-        this.connectBSPNodes(bspTree);
-
-        // 3.5 Identify Spawn Rooms (Outer Edges)
-        const centerX = this.width / 2;
-        const centerY = this.height / 2;
-        
-        // Sort rooms by distance from center (Descending)
-        const sortedRooms = [...this.rooms].sort((a, b) => {
-            const distA = Math.pow(a.cx - centerX, 2) + Math.pow(a.cy - centerY, 2);
-            const distB = Math.pow(b.cx - centerX, 2) + Math.pow(b.cy - centerY, 2);
-            return distB - distA;
-        });
-
-        // Designate the 8 furthest rooms as spawn points
-        this.spawnRooms = sortedRooms.slice(0, 8);
-        this.spawnRooms.forEach(r => r.isSpawn = true);
-
-        // 4. Generate Environmental Features (Lakes)
-        const features = [2, 3, 4]; // Water, Mud, Lava
-        for (let i = 0; i < 8; i++) {
-            const type = features[Math.floor(Math.random() * features.length)];
-            let cx = Math.floor(Math.random() * (this.width - 4)) + 2;
-            let cy = Math.floor(Math.random() * (this.height - 4)) + 2;
-            
-            // Random Walk for organic shape
-            for (let j = 0; j < 15; j++) {
-                if (cx > 0 && cx < this.width - 1 && cy > 0 && cy < this.height - 1) {
-                    if (this.grid[cy][cx] === 0) { // Only replace floor
-                        this.grid[cy][cx] = type;
-                    }
-                }
-                cx += Math.floor(Math.random() * 3) - 1;
-                cy += Math.floor(Math.random() * 3) - 1;
-            }
-        }
-
-        // 5. Place Wall Torches
-        for (let y = 1; y < this.height - 1; y++) {
-            for (let x = 1; x < this.width - 1; x++) {
-                if (this.grid[y][x] === 1) {
-                    // Check if adjacent to floor
-                    let hasFloor = false;
-                    if (this.grid[y+1][x] === 0) hasFloor = true;
-                    else if (this.grid[y-1][x] === 0) hasFloor = true;
-                    else if (this.grid[y][x+1] === 0) hasFloor = true;
-                    else if (this.grid[y][x-1] === 0) hasFloor = true;
-
-                    if (hasFloor && Math.random() < 0.05) {
-                        this.grid[y][x] = 5; // Wall Torch
-                        this.torches.push({ x, y });
-                    }
-                }
-            }
-        }
+        // Add corner torches
+        this.grid[roomY][roomX] = 5; this.torches.push({x: roomX, y: roomY});
+        this.grid[roomY][roomX + roomW - 1] = 5; this.torches.push({x: roomX + roomW - 1, y: roomY});
+        this.grid[roomY + roomH - 1][roomX] = 5; this.torches.push({x: roomX, y: roomY + roomH - 1});
+        this.grid[roomY + roomH - 1][roomX + roomW - 1] = 5; this.torches.push({x: roomX + roomW - 1, y: roomY + roomH - 1});
     }
 
     splitContainer(container, iter) {
@@ -367,50 +301,7 @@ export default class GridSystem {
     }
 
     populate(combatSystem, lootSystem, config) {
-        let validTiles = this.getValidSpawnLocations();
-        // Fisher-Yates shuffle to randomize spawn order
-        for (let i = validTiles.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [validTiles[i], validTiles[j]] = [validTiles[j], validTiles[i]];
-        }
-
-        // Spawn Enemies in Rooms
-        const enemyTypes = Object.keys(config.enemies || {});
-        
-        for (const room of this.rooms) {
-            if (room.isSpawn) continue; // Safe zone
-
-            // Handful of enemies per room (1-3)
-            const count = Math.floor(Math.random() * 3) + 1;
-            for (let i = 0; i < count; i++) {
-                if (enemyTypes.length === 0) break;
-                
-                // Random pos in room (padded)
-                const ex = Math.floor(Math.random() * (room.w - 2)) + room.x + 1;
-                const ey = Math.floor(Math.random() * (room.h - 2)) + room.y + 1;
-                
-                const type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
-                const id = `enemy_${Date.now()}_${Math.random()}`;
-                this.addEntity(id, ex, ey);
-                combatSystem.registerEntity(id, type, false);
-            }
-        }
-
-        // Spawn Loot
-        const chestLocs = this.getChestSpawnLocations();
-        // Shuffle chest locations
-        for (let i = chestLocs.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [chestLocs[i], chestLocs[j]] = [chestLocs[j], chestLocs[i]];
-        }
-
-        const lootCount = 15;
-        
-        for (let i = 0; i < lootCount; i++) {
-            if (chestLocs.length === 0) break;
-            const pos = chestLocs.pop();
-            const tier = lootSystem.getLootTier(pos.x, pos.y, this.width, this.height);
-            lootSystem.spawnRandomLoot(pos.x, pos.y, tier);
-        }
+        // Test Mode: No enemies or loot generation
+        console.log("GridSystem: Test Mode - Population skipped.");
     }
 }
