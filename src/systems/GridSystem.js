@@ -351,4 +351,54 @@ export default class GridSystem {
         // Test Mode: No enemies or loot generation
         console.log("GridSystem: Test Mode - Population skipped.");
     }
+
+    findPath(startX, startY, endX, endY) {
+        // Simple A* Implementation
+        const startNode = { x: startX, y: startY, g: 0, h: 0, f: 0, parent: null };
+        const openList = [startNode];
+        const closedList = new Set();
+        const endKey = this.getKey(endX, endY);
+
+        while (openList.length > 0) {
+            // Sort by F cost
+            openList.sort((a, b) => a.f - b.f);
+            const current = openList.shift();
+            const currentKey = this.getKey(current.x, current.y);
+
+            if (currentKey === endKey) {
+                // Reconstruct path
+                const path = [];
+                let curr = current;
+                while (curr.parent) {
+                    path.unshift({ x: curr.x, y: curr.y });
+                    curr = curr.parent;
+                }
+                return path;
+            }
+
+            closedList.add(currentKey);
+
+            // Neighbors (8-way)
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    
+                    const nx = current.x + dx;
+                    const ny = current.y + dy;
+                    
+                    if (!this.isWalkable(nx, ny)) continue;
+                    if (closedList.has(this.getKey(nx, ny))) continue;
+
+                    const g = current.g + this.getMovementCost(nx, ny);
+                    const h = Math.abs(nx - endX) + Math.abs(ny - endY); // Manhattan heuristic
+                    const f = g + h;
+
+                    const neighbor = { x: nx, y: ny, g, h, f, parent: current };
+                    // Check if already in open list with lower G (skip optimization for brevity)
+                    openList.push(neighbor);
+                }
+            }
+        }
+        return null; // No path found
+    }
 }

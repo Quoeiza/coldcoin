@@ -1,6 +1,6 @@
 import AssetLoader from './utils/AssetLoader.js';
 import GameLoop from './core/GameLoop.js';
-import InputManager from './core/InputManager.js';
+import InputManager, { DIRECTIONS } from './core/InputManager.js';
 import GridSystem from './systems/GridSystem.js';
 import RenderSystem from './systems/RenderSystem.js';
 import CombatSystem from './systems/CombatSystem.js';
@@ -25,7 +25,8 @@ class Game {
             interaction: null, // { type, targetId, startTime, duration, x, y }
             lavaTimer: 0,
             handshakeInterval: null,
-            isExtracting: false
+            isExtracting: false,
+            autoPath: [] // For Auto-Explore
         };
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
@@ -140,6 +141,7 @@ class Game {
         this.setupNetwork();
         this.setupUI();
         this.inputManager.on('intent', (intent) => this.handleInput(intent));
+        this.inputManager.on('click', (data) => this.handleMouseClick(data)); // Keep for UI/Movement, Attack logic moved to polling
         this.audioSystem.resume(); // Unlock audio context on user interaction
 
         this.gameLoop = new GameLoop(
@@ -780,12 +782,61 @@ class Game {
             this.toggleSettingsMenu();
             return;
         }
+        if (intent.type === 'TOGGLE_INVENTORY') {
+            const modal = document.getElementById('inventory-modal');
+            if (modal) {
+                modal.classList.toggle('hidden');
+                if (!modal.classList.contains('hidden')) this.renderInventory();
+            }
+            return;
+        }
 
         const now = Date.now();
         if (now >= this.state.nextActionTime) {
             this.executeAction(intent);
         } else {
             this.state.actionBuffer = intent;
+        }
+    }
+
+    handleMouseClick(data) {
+        if (!this.state.myId || !this.state.connected) return;
+        if (data.button !== 0) return; // Only Left Click for now
+
+        const cam = this.renderSystem.camera;
+        const ts = this.config.global.tileSize || 64;
+        const gridX = Math.floor((data.x + cam.x) / ts);
+        const gridY = Math.floor((data.y + cam.y) / ts);
+
+        const pos = this.gridSystem.entities.get(this.state.myId);
+        if (!pos) return;
+
+        const targetId = this.gridSystem.getEntityAt(gridX, gridY);
+        const loot = this.lootSystem.getLootAt(gridX, gridY);
+
+        // Determine if this is an Attack Command
+        // Shift forces attack. Clicking a hostile entity implies attack.
+        const isHostile = targetId && targetId !== this.state.myId;
+        const isAttack = data.shift || isHostile;
+
+        if (isAttack) {
+            // Attack logic is now handled via polling in update() to support holding and global timer buffering
+            return; 
+        }
+
+        // Move / Interact Logic (No Shift, No Hostile)
+        if (loot) {
+            // Object: Pathfind + Interact
+            const path = this.gridSystem.findPath(pos.x, pos.y, gridX, gridY);
+            if (path && path.length > 0) {
+                // Remove last node (the target itself) to stop adjacent
+                path.pop(); 
+                this.state.autoPath = path;
+            }
+        } else {
+            // Terrain: Pathfind
+            const path = this.gridSystem.findPath(pos.x, pos.y, gridX, gridY);
+            if (path) this.state.autoPath = path;
         }
     }
 
@@ -836,6 +887,52 @@ class Game {
 
         // Apply Terrain Movement Cost
         const pos = this.gridSystem.entities.get(entityId);
+        
+        // Shift Modifier: Facing Update Only
+        if (intent.type === 'MOVE' && intent.shift) {
+            if (pos) {
+                pos.facing = intent.direction;
+                
+                // Check for Ranged Weapon
+                const equip = this.lootSystem.getEquipment(entityId);
+                const weaponId = equip.weapon;
+                const config = weaponId ? this.lootSystem.getItemConfig(weaponId) : null;
+
+                if (config && config.range > 1) {
+                    // Fire Projectile
+                    const proj = { 
+                        id: `proj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                        x: pos.x, 
+                        y: pos.y, 
+                        vx: intent.direction.x, 
+                        vy: intent.direction.y, 
+                        speed: 15, 
+                        ownerId: entityId, 
+                        damage: config.damage 
+                    };
+                    this.state.projectiles.push(proj);
+                    this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
+                    this.audioSystem.play('attack');
+                } else {
+                    // Melee
+                    const tx = pos.x + intent.direction.x;
+                    const ty = pos.y + intent.direction.y;
+                    const targetId = this.gridSystem.getEntityAt(tx, ty);
+                    
+                    if (targetId) {
+                        this.performAttack(entityId, targetId);
+                    } else {
+                        // Whiff
+                        this.renderSystem.triggerAttack(entityId);
+                        this.renderSystem.addEffect(tx, ty, 'slash');
+                        this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
+                        this.audioSystem.play('attack');
+                    }
+                }
+            }
+            return; // Suppress position update
+        }
+
         if (pos && intent.type === 'MOVE') {
             const cost = this.gridSystem.getMovementCost(pos.x + intent.direction.x, pos.y + intent.direction.y);
             cooldown *= cost;
@@ -853,6 +950,10 @@ class Game {
         }
 
         if (intent.type === 'MOVE') {
+            // Capture start position for effects (before mutation)
+            const startX = pos ? pos.x : 0;
+            const startY = pos ? pos.y : 0;
+
             if (pos) {
                 const tx = pos.x + intent.direction.x;
                 const ty = pos.y + intent.direction.y;
@@ -895,7 +996,7 @@ class Game {
             if (result.success) {
                 if (entityId === this.state.myId) {
                     this.audioSystem.play('step');
-                    this.renderSystem.addEffect(pos.x, pos.y, 'dust'); // Dust particle
+                    this.renderSystem.addEffect(startX, startY, 'dust'); // Dust particle
                 }
                 
                 // Check for Extraction
@@ -929,7 +1030,36 @@ class Game {
             }
         }
         
-        if (intent.type === 'PICKUP') {
+        if (intent.type === 'INTERACT') {
+            // Context-Sensitive Interact (Space/Enter)
+            if (pos) {
+                const tx = pos.x + pos.facing.x;
+                const ty = pos.y + pos.facing.y;
+                
+                // 1. Check for Entity (Monster/Player) -> Attack
+                const targetId = this.gridSystem.getEntityAt(tx, ty);
+                if (targetId) {
+                    this.performAttack(entityId, targetId);
+                    return;
+                }
+
+                // 2. Check for Loot/Chest -> Interact
+                const items = this.lootSystem.getItemsAt(tx, ty);
+                if (items.length > 0) {
+                    if (entityId === this.state.myId) this.handleInteractWithLoot(items[0]);
+                    else this.processLootInteraction(entityId, items[0]);
+                    return;
+                }
+
+                // 3. Nothing -> Whiff Attack
+                this.renderSystem.triggerAttack(entityId);
+                this.renderSystem.addEffect(tx, ty, 'slash');
+                this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
+                this.audioSystem.play('attack');
+            }
+        }
+
+        if (intent.type === 'PICKUP') { // Legacy R key
             const stats = this.combatSystem.getStats(entityId);
             
             // Monster Restriction: Cannot pickup items
@@ -967,6 +1097,74 @@ class Game {
             }
         }
 
+        if (intent.type === 'TARGET_ACTION') {
+            // Mouse-based Attack Logic (Moved from handleMouseClick)
+            const gridX = intent.x;
+            const gridY = intent.y;
+            
+            // 1. Get Weapon Config
+            const equip = this.lootSystem.getEquipment(entityId);
+            const weaponId = equip.weapon;
+            const config = weaponId ? this.lootSystem.getItemConfig(weaponId) : null;
+            const isRanged = config && config.range > 1;
+
+            // 2. Calculate Vector & Facing
+            const dx = gridX - pos.x;
+            const dy = gridY - pos.y;
+            
+            // Avoid division by zero if clicking self
+            if (dx !== 0 || dy !== 0) {
+                const angle = Math.atan2(dy, dx);
+                const octant = Math.round(8 * angle / (2 * Math.PI) + 8) % 8;
+                const dirs = [
+                    {x:1, y:0}, {x:1, y:1}, {x:0, y:1}, {x:-1, y:1},
+                    {x:-1, y:0}, {x:-1, y:-1}, {x:0, y:-1}, {x:1, y:-1}
+                ];
+                pos.facing = dirs[octant];
+            }
+
+            if (isRanged) {
+                // Ranged: Fire at specific coordinates
+                const mag = Math.sqrt(dx*dx + dy*dy);
+                const vx = mag === 0 ? pos.facing.x : dx/mag;
+                const vy = mag === 0 ? pos.facing.y : dy/mag;
+
+                // Use ID from intent if provided (prediction), else generate
+                const projId = intent.projId || `proj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
+                const proj = { 
+                    id: projId,
+                    x: pos.x, 
+                    y: pos.y, 
+                    vx: vx, 
+                    vy: vy, 
+                    speed: 15, 
+                    ownerId: entityId, 
+                    damage: config ? config.damage : 5
+                };
+                this.state.projectiles.push(proj);
+                this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
+                this.audioSystem.play('attack');
+                this.renderSystem.triggerAttack(entityId);
+            } else {
+                // Melee: Attack adjacent tile in facing direction
+                const adjX = pos.x + pos.facing.x;
+                const adjY = pos.y + pos.facing.y;
+                const adjId = this.gridSystem.getEntityAt(adjX, adjY);
+
+                if (adjId) {
+                    this.performAttack(entityId, adjId);
+                } else {
+                    // Whiff
+                    this.renderSystem.triggerAttack(entityId);
+                    this.renderSystem.addEffect(adjX, adjY, 'slash');
+                    this.peerClient.send({ type: 'EFFECT', payload: { x: adjX, y: adjY, type: 'slash' } });
+                    this.audioSystem.play('attack');
+                }
+            }
+        }
+
+        // Legacy Attack Intent (if triggered by other means)
         if (intent.type === 'ATTACK') {
             const attacker = this.gridSystem.entities.get(entityId);
             if (attacker) {
@@ -991,10 +1189,12 @@ class Game {
             }
         }
 
-        if (intent.type === 'USE_ITEM') {
-            const effect = this.lootSystem.consumeItem(entityId, intent.slot);
+        if (intent.type === 'USE_ABILITY_SLOT') {
+            // Map slots 0-2 to quick1-3
+            const quickSlot = `quick${intent.slot + 1}`;
+            const effect = this.lootSystem.consumeItem(entityId, quickSlot);
             if (effect) {
-                this.addKillFeed(`Used ${effect.name}`);
+                this.addKillFeed(`Used ${effect.name} (Slot ${intent.slot + 1})`);
                 if (effect.effect === 'heal') {
                     const stats = this.combatSystem.getStats(entityId);
                     if (stats) {
@@ -1010,6 +1210,11 @@ class Game {
             }
         }
 
+        if (intent.type === 'USE_ITEM') { // Legacy
+            // ... existing logic merged above or kept for compatibility
+        }
+
+        // Legacy F key or mapped ability
         if (intent.type === 'ABILITY') {
             const result = this.combatSystem.useAbility(entityId);
             if (result) {
@@ -1024,6 +1229,22 @@ class Game {
                 if (result.effect === 'heal') {
                     this.combatSystem.emit('damage', { targetId: entityId, amount: -result.value, sourceId: entityId, currentHp: this.combatSystem.getStats(entityId).hp });
                 }
+            }
+        }
+
+        if (intent.type === 'AUTO_EXPLORE') {
+            if (entityId !== this.state.myId) return;
+            // Simple BFS to find nearest unexplored tile
+            // We need access to RenderSystem.explored
+            const start = this.gridSystem.entities.get(entityId);
+            if (!start) return;
+
+            // This is a heavy operation, usually done in a WebWorker or time-sliced.
+            // For this implementation, we'll do a limited BFS.
+            const target = this.findNearestUnexplored(start.x, start.y);
+            if (target) {
+                const path = this.gridSystem.findPath(start.x, start.y, target.x, target.y);
+                if (path) this.state.autoPath = path;
             }
         }
     }
@@ -1115,6 +1336,38 @@ class Game {
         if (entityId === this.state.myId) {
             this.showNotification("EXTRACTED! Respawning as Monster...");
         }
+    }
+
+    findNearestUnexplored(startX, startY) {
+        const visited = new Set();
+        const queue = [{x: Math.round(startX), y: Math.round(startY)}];
+        const explored = this.renderSystem.explored; // Set of "x,y"
+        
+        let loops = 0;
+        while(queue.length > 0 && loops < 2000) { // Safety limit
+            loops++;
+            const curr = queue.shift();
+            const key = `${curr.x},${curr.y}`;
+            
+            if (visited.has(key)) continue;
+            visited.add(key);
+
+            // If this tile is NOT explored, it's our target
+            if (!explored.has(key) && this.gridSystem.isWalkable(curr.x, curr.y)) {
+                return curr;
+            }
+
+            // Neighbors
+            const dirs = [{x:0,y:1},{x:0,y:-1},{x:1,y:0},{x:-1,y:0}];
+            for (const d of dirs) {
+                const nx = curr.x + d.x;
+                const ny = curr.y + d.y;
+                if (nx >= 0 && nx < this.gridSystem.width && ny >= 0 && ny < this.gridSystem.height) {
+                    queue.push({x: nx, y: ny});
+                }
+            }
+        }
+        return null;
     }
 
     updateAI(dt) {
@@ -1365,6 +1618,26 @@ class Game {
             const moveIntent = this.inputManager.getMovementIntent();
             const attackIntent = this.inputManager.getAttackIntent();
             
+            // Auto-Explore / Path Following
+            if (this.state.autoPath && this.state.autoPath.length > 0 && !moveIntent) {
+                const next = this.state.autoPath[0];
+                const pos = this.gridSystem.entities.get(this.state.myId);
+                if (pos) {
+                    const dx = next.x - pos.x;
+                    const dy = next.y - pos.y;
+                    // If we are at the node (or close enough), pop it
+                    if (dx === 0 && dy === 0) {
+                        this.state.autoPath.shift();
+                    } else {
+                        // Generate move intent
+                        this.handleInput({ type: 'MOVE', direction: { x: Math.sign(dx), y: Math.sign(dy) } });
+                    }
+                }
+            } else if (moveIntent) {
+                // Manual input cancels auto-path
+                this.state.autoPath = [];
+            }
+
             if (moveIntent) {
                 this.handleInput(moveIntent);
             } else {
@@ -1379,6 +1652,31 @@ class Game {
             } else {
                 if (this.state.actionBuffer && this.state.actionBuffer.type === 'ATTACK') {
                     this.state.actionBuffer = null;
+                }
+            }
+
+            // Poll Mouse for Continuous Attacks
+            const mouse = this.inputManager.getMouseState();
+            if (mouse.left) {
+                const cam = this.renderSystem.camera;
+                const ts = this.config.global.tileSize || 64;
+                const gridX = Math.floor((mouse.x + cam.x) / ts);
+                const gridY = Math.floor((mouse.y + cam.y) / ts);
+                
+                const targetId = this.gridSystem.getEntityAt(gridX, gridY);
+                const isHostile = targetId && targetId !== this.state.myId;
+                
+                if (mouse.shift || isHostile) {
+                    // Generate a deterministic ID for projectiles if needed for prediction
+                    const projId = `proj_${Date.now()}_${this.state.myId}`;
+                    
+                    const intent = { 
+                        type: 'TARGET_ACTION', 
+                        x: gridX, 
+                        y: gridY,
+                        projId: projId
+                    };
+                    this.handleInput(intent);
                 }
             }
         }
