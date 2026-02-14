@@ -924,9 +924,10 @@ class Game {
         if (data.button !== 0) return; // Only Left Click for rest
 
         const cam = this.renderSystem.camera;
-        const ts = this.config.global.tileSize || 64;
-        const gridX = Math.floor((data.x + cam.x) / ts);
-        const gridY = Math.floor((data.y + cam.y) / ts);
+        const ts = this.config.global.tileSize || 48;
+        const scale = this.renderSystem.scale || 1;
+        const gridX = Math.floor(((data.x / scale) + cam.x) / ts);
+        const gridY = Math.floor(((data.y / scale) + cam.y) / ts);
 
         const pos = this.gridSystem.entities.get(this.state.myId);
         if (!pos) return;
@@ -993,8 +994,9 @@ class Game {
 
         const cam = this.renderSystem.camera;
         const ts = this.config.global.tileSize || 64;
-        const gridX = Math.floor((data.x + cam.x) / ts);
-        const gridY = Math.floor((data.y + cam.y) / ts);
+        const scale = this.renderSystem.scale || 1;
+        const gridX = Math.floor(((data.x / scale) + cam.x) / ts);
+        const gridY = Math.floor(((data.y / scale) + cam.y) / ts);
 
         let content = [];
 
@@ -1039,9 +1041,10 @@ class Game {
 
         menu.innerHTML = '';
         const cam = this.renderSystem.camera;
-        const ts = this.config.global.tileSize || 64;
-        const gridX = Math.floor((data.x + cam.x) / ts);
-        const gridY = Math.floor((data.y + cam.y) / ts);
+        const ts = this.config.global.tileSize || 48;
+        const scale = this.renderSystem.scale || 1;
+        const gridX = Math.floor(((data.x / scale) + cam.x) / ts);
+        const gridY = Math.floor(((data.y / scale) + cam.y) / ts);
 
         const actions = [];
 
@@ -2008,9 +2011,10 @@ class Game {
             const mouse = this.inputManager.getMouseState();
             if (mouse.left && this.state.autoPath.length === 0) {
                 const cam = this.renderSystem.camera;
-                const ts = this.config.global.tileSize || 64;
-                const gridX = Math.floor((mouse.x + cam.x) / ts);
-                const gridY = Math.floor((mouse.y + cam.y) / ts);
+                const ts = this.config.global.tileSize || 48;
+                const scale = this.renderSystem.scale || 1;
+                const gridX = Math.floor(((mouse.x / scale) + cam.x) / ts);
+                const gridY = Math.floor(((mouse.y / scale) + cam.y) / ts);
                 
                 const targetId = this.gridSystem.getEntityAt(gridX, gridY);
                 const isHostile = targetId && targetId !== this.state.myId;

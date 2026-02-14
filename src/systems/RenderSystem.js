@@ -8,7 +8,9 @@ export default class RenderSystem {
         this.ctx = this.canvas.getContext('2d');
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
+        this.ctx.imageSmoothingEnabled = false;
         this.tileSize = tileSize || 48; // Ensure default if undefined
+        this.scale = 2;
         
         // Camera
         this.camera = { x: 0, y: 0 };
@@ -32,6 +34,7 @@ export default class RenderSystem {
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
+        this.ctx.imageSmoothingEnabled = false;
     }
 
     clear() {
@@ -50,9 +53,9 @@ export default class RenderSystem {
         if (this.camera.y > 50000) this.camera.y = 50000;
 
         const startCol = Math.floor(this.camera.x / this.tileSize);
-        const endCol = startCol + (this.canvas.width / this.tileSize) + 1;
+        const endCol = startCol + (this.canvas.width / this.scale / this.tileSize) + 1;
         const startRow = Math.floor(this.camera.y / this.tileSize);
-        const endRow = startRow + (this.canvas.height / this.tileSize) + 1;
+        const endRow = startRow + (this.canvas.height / this.scale / this.tileSize) + 1;
 
         // Safety break for loop bounds
         if (endCol - startCol > 500 || endRow - startRow > 500) return;
@@ -71,8 +74,8 @@ export default class RenderSystem {
 
                     if (!grid[y]) continue; // Safety check for row existence
                     const tile = grid[y][x];
-                    const screenX = (x * this.tileSize) - this.camera.x;
-                    const screenY = (y * this.tileSize) - this.camera.y;
+                    const screenX = Math.floor((x * this.tileSize) - this.camera.x);
+                    const screenY = Math.floor((y * this.tileSize) - this.camera.y);
 
                     // Lighting Calculation
                     let brightness = 0;
@@ -314,8 +317,8 @@ export default class RenderSystem {
                 }
             }
 
-            const screenX = (visual.x * this.tileSize) - this.camera.x + offsetX + bumpX;
-            const screenY = (visual.y * this.tileSize) - this.camera.y + offsetY + hopOffset + bumpY;
+            const screenX = Math.floor((visual.x * this.tileSize) - this.camera.x + offsetX + bumpX);
+            const screenY = Math.floor((visual.y * this.tileSize) - this.camera.y + offsetY + hopOffset + bumpY);
 
             // Health Bar (Curved under sprite)
             if (pos.hp !== undefined && pos.maxHp !== undefined && pos.hp < pos.maxHp) {
@@ -384,7 +387,7 @@ export default class RenderSystem {
                 
                 // Calculate Y offset: Bottom of sprite aligns with bottom of tile (+tileSize/2 relative to center)
                 const drawY = (this.tileSize / 2) - spriteH;
-                this.ctx.drawImage(img, -spriteW / 2, drawY, spriteW, spriteH);
+                this.ctx.drawImage(img, Math.floor(-spriteW / 2), Math.floor(drawY), spriteW, spriteH);
                 this.ctx.restore();
             } else {
                 // --- Fallback Procedural Rendering ---
@@ -441,8 +444,8 @@ export default class RenderSystem {
 
     updateCamera(targetX, targetY) {
         // Smooth Camera Follow
-        const targetCamX = (targetX * this.tileSize) - (this.canvas.width / 2);
-        const targetCamY = (targetY * this.tileSize) - (this.canvas.height / 2);
+        const targetCamX = (targetX * this.tileSize) - (this.canvas.width / (2 * this.scale));
+        const targetCamY = (targetY * this.tileSize) - (this.canvas.height / (2 * this.scale));
         
         if (!Number.isFinite(targetCamX) || !Number.isFinite(targetCamY)) return;
 
@@ -459,8 +462,8 @@ export default class RenderSystem {
             // Don't draw loot in FOW
             if (!this.visible.has(`${loot.x},${loot.y}`)) return;
 
-            const screenX = (loot.x * this.tileSize) - this.camera.x;
-            const screenY = (loot.y * this.tileSize) - this.camera.y;
+            const screenX = Math.floor((loot.x * this.tileSize) - this.camera.x);
+            const screenY = Math.floor((loot.y * this.tileSize) - this.camera.y);
             
             if (loot.type === 'bag') {
                 // Draw Bag (Sack)
@@ -519,8 +522,8 @@ export default class RenderSystem {
         this.effects = this.effects.filter(e => now - e.startTime < e.duration);
 
         this.effects.forEach(e => {
-            const screenX = (e.x * this.tileSize) - this.camera.x;
-            const screenY = (e.y * this.tileSize) - this.camera.y;
+            const screenX = Math.floor((e.x * this.tileSize) - this.camera.x);
+            const screenY = Math.floor((e.y * this.tileSize) - this.camera.y);
 
             if (e.type === 'slash') {
                 this.ctx.strokeStyle = '#FFF';
@@ -580,8 +583,8 @@ export default class RenderSystem {
 
     drawProjectiles(projectiles) {
         projectiles.forEach(p => {
-            const screenX = (p.x * this.tileSize) - this.camera.x;
-            const screenY = (p.y * this.tileSize) - this.camera.y;
+            const screenX = Math.floor((p.x * this.tileSize) - this.camera.x);
+            const screenY = Math.floor((p.y * this.tileSize) - this.camera.y);
             
             // Draw Arrow
             this.ctx.save();
@@ -602,8 +605,8 @@ export default class RenderSystem {
     drawInteractionBar(interaction, playerPos) {
         if (!interaction || !playerPos) return;
         
-        const screenX = (playerPos.x * this.tileSize) - this.camera.x;
-        const screenY = (playerPos.y * this.tileSize) - this.camera.y;
+        const screenX = Math.floor((playerPos.x * this.tileSize) - this.camera.x);
+        const screenY = Math.floor((playerPos.y * this.tileSize) - this.camera.y);
         const progress = Math.min(1, (Date.now() - interaction.startTime) / interaction.duration);
 
         // Border
@@ -715,8 +718,11 @@ export default class RenderSystem {
 
         this.clear();
 
-        // Apply Screen Shake
         this.ctx.save();
+        this.ctx.scale(this.scale, this.scale);
+
+        // Apply Screen Shake
+        this.ctx.save(); // Save for shake
         if (Date.now() - this.shake.startTime < this.shake.duration) {
             const dx = (Math.random() - 0.5) * this.shake.intensity;
             const dy = (Math.random() - 0.5) * this.shake.intensity;
@@ -729,10 +735,12 @@ export default class RenderSystem {
         this.drawEntities(entities, localPlayerId);
         this.drawEffects();
         
-        this.ctx.restore();
+        this.ctx.restore(); // Restore shake
 
         // Draw UI-like world elements (Floating Text, Interaction) on top, unaffected by shake
         this.drawFloatingTexts();
         this.drawInteractionBar(interaction, myPos);
+
+        this.ctx.restore(); // Restore scale
     }
 }
