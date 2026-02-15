@@ -722,21 +722,39 @@ export default class RenderSystem {
         // 4. Prepare Shadows (Offscreen)
         sCtx.clearRect(0, 0, w, h);
         
-        // Optimization: Identify visible walls first to avoid redundant calculations
-        const visibleWalls = [];
+        // --- IMPROVED SHADOW LOGIC ---
+        // We separate walls into two lists:
+        // 1. Casters: Visible walls that generate shadow volumes.
+        // 2. Maskers: ALL walls in the vicinity. These must be erased from the shadow 
+        //    layer so shadows don't "draw over" the top of walls.
+        
+        const casters = [];
+        const maskers = [];
+
         const iPx = Math.floor(px);
         const iPy = Math.floor(py);
+        const r = Math.ceil(radius);
+        
+        // Iterate only the relevant area
+        const startY = Math.max(0, iPy - r);
+        const endY = Math.min(grid.length - 1, iPy + r);
+        const startX = Math.max(0, iPx - r);
+        const endX = Math.min(grid[0].length - 1, iPx + r);
 
-        for (let y = iPy - radius; y <= iPy + radius; y++) {
-            for (let x = iPx - radius; x <= iPx + radius; x++) {
-                if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) continue;
+        for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+                // Optimization: Distance check
                 const dx = x - iPx;
                 const dy = y - iPy;
-                if (dx*dx + dy*dy > radius*radius) continue;
+                if (dx*dx + dy*dy > r*r) continue;
                 
                 if (this.isLightBlocking(grid, x, y)) {
+                    // It is a wall, so it must mask itself from receiving floor shadows.
+                    maskers.push({x, y});
+
+                    // If it is visible to the player, it also casts a shadow.
                     if (this.checkLineOfSight(grid, px, py, x, y)) {
-                        visibleWalls.push({x, y});
+                        casters.push({x, y});
                     }
                 }
             }
@@ -744,21 +762,22 @@ export default class RenderSystem {
 
         sCtx.save();
         
-        // Draw Shadow Volumes with Blur
+        // A. Draw Shadow Volumes
         sCtx.globalCompositeOperation = 'source-over';
         sCtx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Match ambient
-        sCtx.filter = 'blur(6px)'; // Soft Shadows
+        sCtx.filter = 'blur(4px)'; // Slight blur for soft shadows
 
-        for (const wall of visibleWalls) {
+        for (const wall of casters) {
             this.drawShadowVolume(sCtx, wall.x, wall.y, px, py, radius);
         }
 
-        // 5. Mask out Walls (Prevent self-shadowing)
+        // B. Mask out ALL Walls (Prevents "Green Circle" issue)
+        // This ensures a wall tile never has a shadow drawn on top of it.
         sCtx.globalCompositeOperation = 'destination-out';
         sCtx.filter = 'none'; // Sharp cutout for walls
         sCtx.fillStyle = '#FFFFFF';
 
-        for (const wall of visibleWalls) {
+        for (const wall of maskers) {
             const tx = Math.floor((wall.x * ts) - this.camera.x);
             const ty = Math.floor((wall.y * ts) - this.camera.y);
             sCtx.fillRect(tx, ty, ts, ts);
@@ -775,7 +794,6 @@ export default class RenderSystem {
         this.ctx.drawImage(this.lightCanvas, 0, 0);
 
         // 8. Warm Hue Overlay (Torch Color)
-        // Use 'overlay' blend mode to tint the lit areas without washing out the darks
         this.ctx.save();
         this.ctx.globalCompositeOperation = 'overlay';
         const colorGrad = this.ctx.createRadialGradient(sx, sy, 0, sx, sy, screenRadius * 0.8);
