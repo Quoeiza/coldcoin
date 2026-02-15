@@ -17,7 +17,8 @@ export const dungeonTilesetConfig = {
         'rocky': 0,
         'dark': 17,
         'mossy': 165,
-        'volcanic': 1832
+        'volcanic': 1832,
+        'test': 347
     },
     floorThemes: {
         'rocky': 0,
@@ -52,7 +53,8 @@ export const dungeonTilesetConfig = {
         'floor_29': 1736,
         'floor_30': 1900,
         'floor_31': 1913,
-        'floor_32': 1926
+        'floor_32': 1926,
+        'test': 1546
     },
     tiles: {
         floor: { sx: 0, sy: 0 }, 
@@ -179,7 +181,7 @@ export class TileMapManager {
         this.config = config;
         this.tileSize = config.tileSize;
         this.assets = {}; 
-        this.currentTheme = 'rocky';
+        this.currentTheme = 'test';
         
         this.voidMap = this.buildLookup(VOID_DATA);
         this.wallMap = this.buildLookup(WALL_DATA);
