@@ -48,6 +48,10 @@ export default class RenderSystem {
         });
     }
 
+    setGridSystem(gridSystem) {
+        this.gridSystem = gridSystem;
+    }
+
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
@@ -631,34 +635,16 @@ export default class RenderSystem {
     }
 
     isLightBlocking(grid, x, y) {
-        if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return false;
-        const t = grid[y][x];
-        
-        // Non-walls never block
-        if (t !== 1 && t !== 5) return false;
-
-        // Check for Walkable Roof Rim (Non-Collidable Wall)
-        // Logic mirrors GridSystem.isWalkable special case
-        if (y > 0) {
-            const n = grid[y-1][x];
-            if (this.isFloor(n)) {
-                let isFrontFace = false;
-                for (let dy = 1; dy <= 2; dy++) {
-                    if (y + dy >= grid.length) break;
-                    const val = grid[y+dy][x];
-                    if (this.isFloor(val)) {
-                        isFrontFace = true;
-                        break;
-                    }
-                    if (val !== 1 && val !== 5) break;
-                }
-                
-                // If NOT a front face, it is a walkable rim -> No Shadow
-                if (!isFrontFace) return false;
-            }
+        // Use GridSystem's authoritative collision logic if available
+        if (this.gridSystem) {
+            // !isWalkable means it is a solid obstacle (Wall/Void)
+            return !this.gridSystem.isWalkable(x, y);
         }
 
-        return true;
+        // Fallback
+        if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return false;
+        const t = grid[y][x];
+        return t === 1 || t === 5;
     }
 
     checkLineOfSight(grid, x0, y0, x1, y1) {
@@ -735,13 +721,9 @@ export default class RenderSystem {
 
         // 4. Prepare Shadows (Offscreen)
         sCtx.clearRect(0, 0, w, h);
-        sCtx.save();
         
-        // Draw Shadow Volumes with Blur
-        sCtx.globalCompositeOperation = 'source-over';
-        sCtx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Match ambient
-        sCtx.filter = 'blur(6px)'; // Soft Shadows
-        
+        // Optimization: Identify visible walls first to avoid redundant calculations
+        const visibleWalls = [];
         const iPx = Math.floor(px);
         const iPy = Math.floor(py);
 
@@ -751,10 +733,24 @@ export default class RenderSystem {
                 const dx = x - iPx;
                 const dy = y - iPy;
                 if (dx*dx + dy*dy > radius*radius) continue;
-                if (!this.isLightBlocking(grid, x, y)) continue;
-
-                this.drawShadowVolume(sCtx, x, y, px, py, radius);
+                
+                if (this.isLightBlocking(grid, x, y)) {
+                    if (this.checkLineOfSight(grid, px, py, x, y)) {
+                        visibleWalls.push({x, y});
+                    }
+                }
             }
+        }
+
+        sCtx.save();
+        
+        // Draw Shadow Volumes with Blur
+        sCtx.globalCompositeOperation = 'source-over';
+        sCtx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Match ambient
+        sCtx.filter = 'blur(6px)'; // Soft Shadows
+
+        for (const wall of visibleWalls) {
+            this.drawShadowVolume(sCtx, wall.x, wall.y, px, py, radius);
         }
 
         // 5. Mask out Walls (Prevent self-shadowing)
@@ -762,17 +758,10 @@ export default class RenderSystem {
         sCtx.filter = 'none'; // Sharp cutout for walls
         sCtx.fillStyle = '#FFFFFF';
 
-        for (let y = iPy - radius; y <= iPy + radius; y++) {
-            for (let x = iPx - radius; x <= iPx + radius; x++) {
-                if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) continue;
-                if (!this.isLightBlocking(grid, x, y)) continue;
-
-                if (this.checkLineOfSight(grid, px, py, x, y)) {
-                    const tx = Math.floor((x * ts) - this.camera.x);
-                    const ty = Math.floor((y * ts) - this.camera.y);
-                    sCtx.fillRect(tx, ty, ts, ts);
-                }
-            }
+        for (const wall of visibleWalls) {
+            const tx = Math.floor((wall.x * ts) - this.camera.x);
+            const ty = Math.floor((wall.y * ts) - this.camera.y);
+            sCtx.fillRect(tx, ty, ts, ts);
         }
         sCtx.restore();
 

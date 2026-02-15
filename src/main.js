@@ -59,6 +59,7 @@ class Game {
             global.tileSize || 48
         );
         this.renderSystem.setAssetLoader(this.assetLoader);
+        this.renderSystem.setGridSystem(this.gridSystem);
 
         this.combatSystem = new CombatSystem(configs.enemies);
         this.lootSystem = new LootSystem(configs.items);
