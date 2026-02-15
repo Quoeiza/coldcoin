@@ -635,10 +635,9 @@ export default class RenderSystem {
     }
 
     isLightBlocking(grid, x, y) {
-        // Use GridSystem's authoritative collision logic if available
-        if (this.gridSystem) {
-            // !isWalkable means it is a solid obstacle (Wall/Void)
-            return !this.gridSystem.isWalkable(x, y);
+        // LINKED SYSTEM: Use TileMapManager for visual consistency.
+        if (this.tileMapManager) {
+            return this.tileMapManager.getTileVal(grid, x, y) === 1;
         }
 
         // Fallback
@@ -748,11 +747,19 @@ export default class RenderSystem {
                 const dy = y - iPy;
                 if (dx*dx + dy*dy > r*r) continue;
                 
-                if (this.isLightBlocking(grid, x, y)) {
-                    // It is a wall, so it must mask itself from receiving floor shadows.
-                    maskers.push({x, y});
+                // --- LINKED SYSTEM: TileMapManager Classification ---
+                const isWall = this.tileMapManager.getTileVal(grid, x, y) === 1;
+                const isFrontFace = this.tileMapManager.isFrontFace(grid, x, y);
+                const isVoid = this.tileMapManager.shouldDrawVoid(grid, x, y);
 
-                    // If it is visible to the player, it also casts a shadow.
+                // 1. Maskers: Walls, Faces, and Voids/Roofs.
+                // These are "above" the floor and should not receive floor shadows.
+                if (isWall || isVoid) {
+                    maskers.push({x, y});
+                }
+
+                // 2. Casters: Only Front Faces (Vertical Walls) cast shadows.
+                if (isFrontFace) {
                     if (this.checkLineOfSight(grid, px, py, x, y)) {
                         casters.push({x, y});
                     }
