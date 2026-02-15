@@ -186,7 +186,38 @@ export default class GridSystem {
         y = Math.round(y);
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
         const t = this.grid[y][x];
-        return t === 0 || t === 2 || t === 3 || t === 4 || t === 9;
+        
+        // Standard walkable tiles
+        if (t === 0 || t === 2 || t === 3 || t === 4 || t === 9) return true;
+
+        // Special Case: "Top Edge" Walls (Visual Roof Rims)
+        // Allows walking "behind" the wall (visually under the roof).
+        // Condition: It is a Wall, the tile Above is Floor, and it is NOT a Front Face.
+        if (t === 1 || t === 5) {
+            if (y > 0) {
+                const n = this.grid[y-1][x];
+                // Check if North is Floor-like
+                if (n === 0 || n === 2 || n === 3 || n === 4 || n === 9) {
+                    // Check if this is a Front Face (Vertical Wall)
+                    let isFrontFace = false;
+                    // Scan downwards (Limit 2 to match TileMapManager)
+                    for (let dy = 1; dy <= 2; dy++) {
+                        if (y + dy >= this.height) break;
+                        const val = this.grid[y+dy][x];
+                        if (val === 0 || val === 2 || val === 3 || val === 4 || val === 9) {
+                            isFrontFace = true;
+                            break;
+                        }
+                        if (val !== 1 && val !== 5) break; // Obstructed
+                    }
+                    
+                    // If it's NOT a front face, it's a walkable roof rim
+                    if (!isFrontFace) return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     getMovementCost(x, y) {
