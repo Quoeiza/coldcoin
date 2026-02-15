@@ -348,6 +348,7 @@ export class TileMapManager {
     drawWalls(ctx, map, viewBounds) {
         if (!this.assets.wall) return;
         const ts = this.tileSize;
+        const halfTs = ts * 0.5;
         const sheetW = this.config.sheetWidth;
         const themeOffset = this.config.themes[this.currentTheme] || 0;
         const { startCol, endCol, startRow, endRow } = viewBounds;
@@ -361,12 +362,18 @@ export class TileMapManager {
                     // This is the vertical stone wall.
                     const tileID = this.getWallTileID(map, x, y);
                     
-                    // Skip Top Walls (0, 1, 2) - they are drawn in drawRoof to appear above entities
-                    if (tileID >= 0 && tileID <= 2) continue;
-
                     const finalID = tileID + themeOffset;
                     const sheetX = (finalID % sheetW) * ts;
                     const sheetY = Math.floor(finalID / sheetW) * ts;
+
+                    // Special handling for Top Walls (0, 1, 2)
+                    // Draw the BOTTOM HALF in the background layer so entities can walk "in front" of it
+                    if (tileID >= 0 && tileID <= 2) {
+                        ctx.drawImage(this.assets.wall, 
+                            sheetX, sheetY + halfTs, ts, halfTs, 
+                            x * ts, (y * ts) + halfTs, ts, halfTs);
+                        continue;
+                    }
 
                     ctx.drawImage(this.assets.wall, sheetX, sheetY, ts, ts, x * ts, y * ts, ts, ts);
                 } 
@@ -377,6 +384,7 @@ export class TileMapManager {
     drawRoof(ctx, map, viewBounds) {
         if (!this.assets.wall) return;
         const ts = this.tileSize;
+        const halfTs = ts * 0.5;
         const sheetW = this.config.sheetWidth;
         const themeOffset = this.config.themes[this.currentTheme] || 0;
         const { startCol, endCol, startRow, endRow } = viewBounds;
@@ -409,7 +417,11 @@ export class TileMapManager {
                         const finalID = tileID + themeOffset;
                         const sheetX = (finalID % sheetW) * ts;
                         const sheetY = Math.floor(finalID / sheetW) * ts;
-                        ctx.drawImage(this.assets.wall, sheetX, sheetY, ts, ts, x * ts, y * ts, ts, ts);
+                        
+                        // Draw ONLY the TOP HALF in the foreground layer
+                        ctx.drawImage(this.assets.wall, 
+                            sheetX, sheetY, ts, halfTs, 
+                            x * ts, y * ts, ts, halfTs);
                     }
                 }
             }
