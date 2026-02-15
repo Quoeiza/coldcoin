@@ -128,13 +128,38 @@ export class TileMapManager {
     // LOGIC: Is this a vertical face visible to the player?
     // It's a face if:
     // 1. It is a WALL
-    // 2. AND (The tile below is Floor OR The tile 2-below is Floor)
-    // This supports walls that are 1 or 2 tiles high.
+    // 2. AND there is a Floor tile somewhere directly below it in the column
     isFrontFace(map, x, y) {
         if (this.getTileVal(map, x, y) !== 1) return false;
-        const s = this.getTileVal(map, x, y + 1);
-        const ss = this.getTileVal(map, x, y + 2);
-        return (s === 0) || (s === 1 && ss === 0);
+        
+        // Scan downwards for floor, with a limit to prevent infinite walls
+        // This ensures deep walls eventually become roofs.
+        const limit = 2;
+        for (let dy = 1; dy <= limit; dy++) {
+            if (y + dy >= map.length) break;
+            const val = this.getTileVal(map, x, y + dy);
+            if (val === 0) return true; // Found floor base
+            if (val !== 1) return false; // Obstructed by something else
+        }
+        return false;
+    }
+
+    getWallTileID(map, x, y) {
+        const w = this.getTileVal(map, x - 1, y);
+        const e = this.getTileVal(map, x + 1, y);
+        let colID = 1; // Default Center
+        if (w === 0 && e === 1) colID = 0;      // Left
+        else if (w === 1 && e === 1) colID = 1; // Center
+        else if (w === 1 && e === 0) colID = 2; // Right
+
+        const below = this.getTileVal(map, x, y + 1);
+
+        if (below === 0) return 66 + colID;      // Bottom
+        
+        // If the tile above is NOT a front face (it's a roof or floor), then THIS is the Top.
+        if (!this.isFrontFace(map, x, y - 1)) return 0 + colID; // Top
+        
+        return 33 + colID;                       // Middle
     }
 
     // LOGIC: Should we draw a Void/Roof tile here?
@@ -220,14 +245,10 @@ export class TileMapManager {
                 if (this.isFrontFace(map, x, y)) {
                     // --- DRAW FRONT FACE ---
                     // This is the vertical stone wall.
-                    const wangID = this.getWangID(map, x, y, 'FACE');
-                    this.canonicalizeWang(wangID);
-                    const key = wangID.join(',');
-                    
-                    const tileID = this.wallMap.has(key) ? this.wallMap.get(key) : 34;
+                    const tileID = this.getWallTileID(map, x, y);
                     
                     // Skip Top Walls (0, 1, 2) - they are drawn in drawRoof to appear above entities
-                    if (tileID === 0 || tileID === 1 || tileID === 2) continue;
+                    if (tileID >= 0 && tileID <= 2) continue;
 
                     const finalID = tileID + themeOffset;
                     const sheetX = (finalID % sheetW) * ts;
@@ -268,12 +289,9 @@ export class TileMapManager {
 
                 // --- DRAW TOP WALLS (Layer Above) ---
                 if (this.isFrontFace(map, x, y)) {
-                    const wangID = this.getWangID(map, x, y, 'FACE');
-                    this.canonicalizeWang(wangID);
-                    const key = wangID.join(',');
-                    const tileID = this.wallMap.has(key) ? this.wallMap.get(key) : 34;
+                    const tileID = this.getWallTileID(map, x, y);
 
-                    if (tileID === 0 || tileID === 1 || tileID === 2) {
+                    if (tileID >= 0 && tileID <= 2) {
                         const finalID = tileID + themeOffset;
                         const sheetX = (finalID % sheetW) * ts;
                         const sheetY = Math.floor(finalID / sheetW) * ts;
