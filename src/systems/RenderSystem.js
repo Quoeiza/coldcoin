@@ -14,16 +14,24 @@ export default class RenderSystem {
         this.tileSize = tileSize || 48; // Match tile manager config
         this.scale = 2;
 
+        // Lighting Layer
+        this.lightCanvas = document.createElement('canvas');
+        this.lightCtx = this.lightCanvas.getContext('2d');
+        this.lightCanvas.width = window.innerWidth;
+        this.lightCanvas.height = window.innerHeight;
+
+        // Shadow Layer (Offscreen)
+        this.shadowCanvas = document.createElement('canvas');
+        this.shadowCtx = this.shadowCanvas.getContext('2d');
+        this.shadowCanvas.width = window.innerWidth;
+        this.shadowCanvas.height = window.innerHeight;
+
         // TileMap Manager for sprite-based rendering
         this.tileMapManager = new TileMapManager(dungeonTilesetConfig);
 
         // Camera
         this.camera = { x: 0, y: 0 };
         
-        // Fog of War
-        this.explored = new Set(); // "x,y"
-        this.visible = new Set();  // "x,y"
-
         // Visual Effects
         this.effects = []; // { x, y, type, startTime, duration }
         this.floatingTexts = []; // { x, y, text, color, startTime, duration }
@@ -43,6 +51,10 @@ export default class RenderSystem {
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
+        this.lightCanvas.width = window.innerWidth;
+        this.lightCanvas.height = window.innerHeight;
+        this.shadowCanvas.width = window.innerWidth;
+        this.shadowCanvas.height = window.innerHeight;
         this.ctx.imageSmoothingEnabled = false;
     }
 
@@ -75,12 +87,6 @@ export default class RenderSystem {
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
                 if (y < 0 || y >= height || x < 0 || x >= width) continue;
-
-                const key = `${x},${y}`;
-                const isVisible = this.visible.has(key);
-                const isExplored = this.explored.has(key);
-
-                if (!isExplored && !isVisible) continue;
 
                 const tile = grid[y][x];
                 // TileMapManager has already drawn the base for tiles 0 and 1.
@@ -147,12 +153,6 @@ export default class RenderSystem {
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
                 if (y < 0 || y >= height || x < 0 || x >= width) continue;
-
-                const key = `${x},${y}`;
-                const isVisible = this.visible.has(key);
-                const isExplored = this.explored.has(key);
-
-                if (!isExplored && !isVisible) continue;
 
                 const tile = grid[y][x];
                 if (tile !== 0 && tile !== 1) {
@@ -277,11 +277,6 @@ export default class RenderSystem {
             // We use the fractional part of the visual position to determine the hop arc
             const hopOffset = -Math.sin(Math.PI * Math.max(Math.abs(visual.x % 1), Math.abs(visual.y % 1))) * (this.tileSize * 0.125);
 
-            // Don't draw entities in FOW (unless it's me)
-            // Use logical position for FOW check to prevent popping
-            const key = `${Math.round(pos.x)},${Math.round(pos.y)}`;
-            if (id !== localPlayerId && !this.visible.has(key)) continue;
-            
             // Stealth Check
             if (pos.invisible) {
                 if (id !== localPlayerId) continue; // Completely invisible to others
@@ -474,9 +469,6 @@ export default class RenderSystem {
 
     drawLoot(lootMap) {
         lootMap.forEach((loot) => {
-            // Don't draw loot in FOW
-            if (!this.visible.has(`${loot.x},${loot.y}`)) return;
-
             const screenX = Math.floor((loot.x * this.tileSize) - Math.floor(this.camera.x));
             const screenY = Math.floor((loot.y * this.tileSize) - Math.floor(this.camera.y));
             
@@ -634,69 +626,228 @@ export default class RenderSystem {
         this.ctx.fillRect(screenX + (this.tileSize * 0.03), screenY - (this.tileSize * 0.28), (this.tileSize - (this.tileSize * 0.06)) * progress, this.tileSize * 0.125);
     }
 
-    updateFog(playerPos, grid) {
-        this.visible.clear();
-        if (!playerPos) return;
+    isFloor(t) {
+        return t === 0 || t === 2 || t === 3 || t === 4 || t === 9;
+    }
+
+    isLightBlocking(grid, x, y) {
+        if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return false;
+        const t = grid[y][x];
         
-        // Safety check for infinite coordinates
-        if (!Number.isFinite(playerPos.x) || !Number.isFinite(playerPos.y)) return;
+        // Non-walls never block
+        if (t !== 1 && t !== 5) return false;
 
-        const px = Math.round(playerPos.x);
-        const py = Math.round(playerPos.y);
-        const radius = 8;
-        const r2 = radius * radius;
-
-        // Iterate bounding box of radius
-        for (let y = py - radius; y <= py + radius; y++) {
-            for (let x = px - radius; x <= px + radius; x++) {
-                // Check bounds
-                if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) continue;
-
-                const dx = x - px;
-                const dy = y - py;
-                
-                // Circle mask
-                if (dx*dx + dy*dy <= r2) {
-                    // Raycast for shadows
-                    if (this.checkLineOfSight(grid, px, py, x, y)) {
-                        const key = `${x},${y}`;
-                        this.visible.add(key);
-                        this.explored.add(key);
+        // Check for Void Edge (Walkable Roof Rim)
+        // Condition: North is Floor AND Not a Front Face
+        if (y > 0) {
+            const n = grid[y-1][x];
+            if (this.isFloor(n)) {
+                let isFrontFace = false;
+                // Scan downwards (Limit 2)
+                for (let dy = 1; dy <= 2; dy++) {
+                    if (y + dy >= grid.length) break;
+                    const val = grid[y+dy][x];
+                    if (this.isFloor(val)) {
+                        isFrontFace = true;
+                        break;
                     }
+                    if (val !== 1 && val !== 5) break; // Obstructed
                 }
+                
+                // If NOT a front face, it is a walkable rim -> Treat as floor (Non-blocking)
+                if (!isFrontFace) return false;
             }
         }
+
+        return true;
     }
 
     checkLineOfSight(grid, x0, y0, x1, y1) {
-        x0 = Math.round(x0); y0 = Math.round(y0);
-        x1 = Math.round(x1); y1 = Math.round(y1);
+        let x = Math.floor(x0);
+        let y = Math.floor(y0);
+        const tx = Math.floor(x1);
+        const ty = Math.floor(y1);
 
-        let dx = Math.abs(x1 - x0);
-        let dy = Math.abs(y1 - y0);
-        let sx = (x0 < x1) ? 1 : -1;
-        let sy = (y0 < y1) ? 1 : -1;
+        const dx = Math.abs(tx - x);
+        const dy = Math.abs(ty - y);
+        const sx = (x < tx) ? 1 : -1;
+        const sy = (y < ty) ? 1 : -1;
         let err = dx - dy;
+
+        const startX = x;
+        const startY = y;
 
         let loops = 0;
         while (true) {
             if (loops++ > 100) return false; // Safety break
-            if (x0 === x1 && y0 === y1) return true; // Reached target
+            if (x === tx && y === ty) return true; // Reached target
             
-            // Bounds check
-            if (y0 < 0 || y0 >= grid.length || x0 < 0 || x0 >= grid[0].length) return false;
-            
-            if (grid[y0][x0] === 1) return false; // Blocked by wall
+            // Check collision (ignore start tile and target tile)
+            if ((x !== startX || y !== startY) && (x !== tx || y !== ty)) {
+                if (this.isLightBlocking(grid, x, y)) return false;
+            }
 
             let e2 = 2 * err;
-            if (e2 > -dy) { err -= dy; x0 += sx; }
-            if (e2 < dx) { err += dx; y0 += sy; }
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 < dx) { err += dx; y += sy; }
         }
+    }
+
+    renderLighting(grid, playerVisual) {
+        const ctx = this.lightCtx;
+        const sCtx = this.shadowCtx;
+        const w = this.lightCanvas.width;
+        const h = this.lightCanvas.height;
+        const ts = this.tileSize;
+
+        // 1. Clear & Draw Ambient Darkness (High Contrast)
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(5, 5, 12, 0.94)'; // Grimdark ambient
+        ctx.fillRect(0, 0, w, h);
+
+        if (!playerVisual) return;
+
+        // 2. Torch Configuration
+        const radius = 10; // Tiles
+        const px = playerVisual.x;
+        const py = playerVisual.y;
+        
+        // Calculate Screen Coordinates
+        const sx = Math.floor((px * ts) - this.camera.x + (ts * 0.5));
+        const sy = Math.floor((py * ts) - this.camera.y + (ts * 0.5));
+        const screenRadius = radius * ts;
+
+        ctx.save();
+        
+        // 3. Cut the "Light Hole" (Attenuation)
+        // We use destination-out to remove the darkness, creating the light source.
+        ctx.globalCompositeOperation = 'destination-out';
+        const grad = ctx.createRadialGradient(sx, sy, ts * 1.5, sx, sy, screenRadius);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)'); // Core
+        grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.3)'); // Falloff
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0)'); // Edge
+        
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sx, sy, screenRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // 4. Prepare Shadows (Offscreen)
+        sCtx.clearRect(0, 0, w, h);
+        sCtx.save();
+        
+        // Draw Shadow Volumes with Blur
+        sCtx.globalCompositeOperation = 'source-over';
+        sCtx.fillStyle = 'rgba(5, 5, 12, 0.94)'; // Match ambient
+        sCtx.filter = 'blur(6px)'; // Soft Shadows
+        
+        const iPx = Math.floor(px);
+        const iPy = Math.floor(py);
+
+        for (let y = iPy - radius; y <= iPy + radius; y++) {
+            for (let x = iPx - radius; x <= iPx + radius; x++) {
+                if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) continue;
+                const dx = x - iPx;
+                const dy = y - iPy;
+                if (dx*dx + dy*dy > radius*radius) continue;
+                if (!this.isLightBlocking(grid, x, y)) continue;
+
+                this.drawShadowVolume(sCtx, x, y, px, py, radius);
+            }
+        }
+
+        // 5. Mask out Walls (Prevent self-shadowing)
+        sCtx.globalCompositeOperation = 'destination-out';
+        sCtx.filter = 'none'; // Sharp cutout for walls
+        sCtx.fillStyle = '#FFFFFF';
+
+        for (let y = iPy - radius; y <= iPy + radius; y++) {
+            for (let x = iPx - radius; x <= iPx + radius; x++) {
+                if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) continue;
+                if (!this.isLightBlocking(grid, x, y)) continue;
+
+                if (this.checkLineOfSight(grid, px, py, x, y)) {
+                    const tx = Math.floor((x * ts) - this.camera.x);
+                    const ty = Math.floor((y * ts) - this.camera.y);
+                    sCtx.fillRect(tx, ty, ts, ts);
+                }
+            }
+        }
+        sCtx.restore();
+
+        // 6. Apply Shadows to Light Layer
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(this.shadowCanvas, 0, 0);
+        ctx.restore();
+
+        // 7. Apply Lighting Layer to Main Canvas
+        this.ctx.drawImage(this.lightCanvas, 0, 0);
+
+        // 8. Warm Hue Overlay (Torch Color)
+        // Use 'overlay' blend mode to tint the lit areas without washing out the darks
+        this.ctx.save();
+        this.ctx.globalCompositeOperation = 'overlay';
+        const colorGrad = this.ctx.createRadialGradient(sx, sy, 0, sx, sy, screenRadius * 0.8);
+        colorGrad.addColorStop(0, 'rgba(255, 160, 60, 0.5)'); // Warm Orange
+        colorGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        this.ctx.fillStyle = colorGrad;
+        this.ctx.beginPath();
+        this.ctx.arc(sx, sy, screenRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.restore();
+    }
+
+    drawShadowVolume(ctx, gx, gy, lx, ly, radius) {
+        const ts = this.tileSize;
+        const tx = (gx * ts) - this.camera.x;
+        const ty = (gy * ts) - this.camera.y;
+        const lsx = (lx * ts) - this.camera.x + (ts * 0.5);
+        const lsy = (ly * ts) - this.camera.y + (ts * 0.5);
+
+        const corners = [
+            { x: tx, y: ty },
+            { x: tx + ts, y: ty },
+            { x: tx + ts, y: ty + ts },
+            { x: tx, y: ty + ts }
+        ];
+
+        const points = [];
+        const projectDist = radius * ts * 2;
+
+        corners.forEach(c => {
+            points.push(c);
+            const dx = c.x - lsx;
+            const dy = c.y - lsy;
+            const len = Math.sqrt(dx*dx + dy*dy);
+            if (len > 0.001) {
+                points.push({
+                    x: c.x + (dx / len) * projectDist,
+                    y: c.y + (dy / len) * projectDist
+                });
+            }
+        });
+
+        let cx = 0, cy = 0;
+        points.forEach(p => { cx += p.x; cy += p.y; });
+        cx /= points.length;
+        cy /= points.length;
+
+        points.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
     }
 
     render(grid, entities, loot, projectiles, interaction, localPlayerId) {
         const myPos = entities.get(localPlayerId);
-        this.updateFog(myPos, grid);
         
         // Camera: Match player's interpolated visual movement
         if (myPos) {
@@ -751,6 +902,9 @@ export default class RenderSystem {
         this.drawEntities(entities, localPlayerId);
         this.drawEffects();
         this.drawRoof(grid, grid[0].length, grid.length);
+        
+        // Render Lighting Pass (Dynamic Shadows & Torch)
+        this.renderLighting(grid, this.visualEntities.get(localPlayerId));
         
         this.ctx.restore(); // Restore shake
 
