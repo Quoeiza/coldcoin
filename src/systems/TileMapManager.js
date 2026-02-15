@@ -26,6 +26,7 @@ export const dungeonTilesetConfig = {
 // --- TILED DATA ---
 // VOID: Roofs/Ceilings (Black with Stone Rims)
 const VOID_DATA = [
+    { id: 103, w: [0, 0, 0, 0, 0, 0, 0, 0] },
     { id: 4, w: [0, 0, 0, 0, 1, 0, 0, 0] },
     { id: 5, w: [0, 0, 1, 0, 1, 0, 0, 0] },
     { id: 6, w: [0, 0, 1, 0, 1, 0, 1, 0] },
@@ -192,30 +193,29 @@ export class TileMapManager {
         if (w[6] === 0 || w[0] === 0) w[7] = 0;
     }
 
-    draw(ctx, map, viewBounds) {
-        if (!this.assets.floor || !this.assets.wall) return;
+    drawFloor(ctx, map, viewBounds) {
+        if (!this.assets.floor) return;
         const ts = this.tileSize;
-        const sheetW = this.config.sheetWidth;
-        const themeOffset = this.config.themes[this.currentTheme] || 0;
-
         const { startCol, endCol, startRow, endRow } = viewBounds;
 
-        // --- LAYER 1: FLOOR (Pass 1) ---
-        // We always draw the floor first.
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
                 if (y < 0 || y >= map.length || x < 0 || x >= map[0].length) continue;
                 ctx.drawImage(this.assets.floor, 0, 0, ts, ts, x * ts, y * ts, ts, ts);
             }
         }
-        
-        // --- LAYER 2: WALLS & OVERLAYS (Pass 2) ---
-        // We iterate ALL tiles to handle walls and roof overlays.
+    }
+
+    drawWalls(ctx, map, viewBounds) {
+        if (!this.assets.wall) return;
+        const ts = this.tileSize;
+        const sheetW = this.config.sheetWidth;
+        const themeOffset = this.config.themes[this.currentTheme] || 0;
+        const { startCol, endCol, startRow, endRow } = viewBounds;
+
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
                 if (y < 0 || y >= map.length || x < 0 || x >= map[0].length) continue;
-
-                let tileID = -1;
 
                 if (this.isFrontFace(map, x, y)) {
                     // --- DRAW FRONT FACE ---
@@ -224,35 +224,61 @@ export class TileMapManager {
                     this.canonicalizeWang(wangID);
                     const key = wangID.join(',');
                     
-                    if (this.wallMap.has(key)) {
-                        tileID = this.wallMap.get(key);
-                    } else {
-                        // Default to Center Wall if unknown connection
-                        tileID = 34; 
-                    }
+                    const tileID = this.wallMap.has(key) ? this.wallMap.get(key) : 34;
+                    
+                    // Skip Top Walls (0, 1, 2) - they are drawn in drawRoof to appear above entities
+                    if (tileID === 0 || tileID === 1 || tileID === 2) continue;
+
+                    const finalID = tileID + themeOffset;
+                    const sheetX = (finalID % sheetW) * ts;
+                    const sheetY = Math.floor(finalID / sheetW) * ts;
+
+                    ctx.drawImage(this.assets.wall, sheetX, sheetY, ts, ts, x * ts, y * ts, ts, ts);
                 } 
-                else if (this.shouldDrawVoid(map, x, y)) {
+            }
+        }
+    }
+
+    drawRoof(ctx, map, viewBounds) {
+        if (!this.assets.wall) return;
+        const ts = this.tileSize;
+        const sheetW = this.config.sheetWidth;
+        const themeOffset = this.config.themes[this.currentTheme] || 0;
+        const { startCol, endCol, startRow, endRow } = viewBounds;
+
+        for (let y = startRow; y <= endRow; y++) {
+            for (let x = startCol; x <= endCol; x++) {
+                if (y < 0 || y >= map.length || x < 0 || x >= map[0].length) continue;
+
+                if (this.shouldDrawVoid(map, x, y)) {
                     // --- DRAW VOID / ROOF ---
                     // This is the black ceiling or the edge rim.
                     const wangID = this.getWangID(map, x, y, 'VOID');
                     this.canonicalizeWang(wangID);
                     const key = wangID.join(',');
 
-                    if (this.voidMap.has(key)) {
-                        tileID = this.voidMap.get(key);
-                    } else {
-                        // Default to Pure Void (Black)
-                        tileID = 79; 
-                    }
-                }
+                    const tileID = this.voidMap.has(key) ? this.voidMap.get(key) : 79;
 
-                // Render the calculated tile
-                if (tileID !== -1) {
                     const finalID = tileID + themeOffset;
                     const sheetX = (finalID % sheetW) * ts;
                     const sheetY = Math.floor(finalID / sheetW) * ts;
 
                     ctx.drawImage(this.assets.wall, sheetX, sheetY, ts, ts, x * ts, y * ts, ts, ts);
+                }
+
+                // --- DRAW TOP WALLS (Layer Above) ---
+                if (this.isFrontFace(map, x, y)) {
+                    const wangID = this.getWangID(map, x, y, 'FACE');
+                    this.canonicalizeWang(wangID);
+                    const key = wangID.join(',');
+                    const tileID = this.wallMap.has(key) ? this.wallMap.get(key) : 34;
+
+                    if (tileID === 0 || tileID === 1 || tileID === 2) {
+                        const finalID = tileID + themeOffset;
+                        const sheetX = (finalID % sheetW) * ts;
+                        const sheetY = Math.floor(finalID / sheetW) * ts;
+                        ctx.drawImage(this.assets.wall, sheetX, sheetY, ts, ts, x * ts, y * ts, ts, ts);
+                    }
                 }
             }
         }

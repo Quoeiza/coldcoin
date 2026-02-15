@@ -771,7 +771,7 @@ class Game {
                     console.log(`Client ${sender} said HELLO. Sending World.`);
                     this.peerClient.sendTo(sender, {
                         type: 'INIT_WORLD',
-                        payload: { grid: this.gridSystem.grid, torches: this.gridSystem.torches }
+                        payload: { grid: this.gridSystem.grid }
                     });
                 }
             } else {
@@ -781,7 +781,6 @@ class Game {
                 } else if (data.type === 'INIT_WORLD') {
                     console.log("Client: Received INIT_WORLD", data.payload);
                     this.gridSystem.grid = data.payload.grid;
-                    this.gridSystem.torches = data.payload.torches || [];
                     
                     // Stop the handshake retry loop
                     if (this.state.handshakeInterval) {
@@ -2109,9 +2108,6 @@ class Game {
             const s = t % 60;
             timerEl.innerText = `${m}:${s.toString().padStart(2, '0')}`;
         }
-
-        // Attach torches to grid object for renderer convenience (hacky but effective for now)
-        if (this.gridSystem.grid) this.gridSystem.grid.torches = this.gridSystem.torches;
 
         this.renderSystem.render(
             this.gridSystem.grid, 

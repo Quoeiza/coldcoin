@@ -4,7 +4,6 @@ export default class GridSystem {
         this.height = height;
         this.tileSize = tileSize;
         this.grid = []; // 0: Floor, 1: Wall
-        this.torches = []; // Array of {x, y}
         this.entities = new Map(); // Map<EntityID, {x, y, facing: {x, y}}>
         this.spatialMap = new Map(); // Map<int, EntityID> - Optimization for O(1) lookups
     }
@@ -13,21 +12,25 @@ export default class GridSystem {
         // 1. Fill with walls
         this.grid = new Array(this.height).fill(0).map(() => new Array(this.width).fill(1));
         this.rooms = [];
-        this.torches = [];
         this.spawnRooms = []; // Special rooms for player spawns
         this.spatialMap.clear();
 
         // 2. Create dungeon layout with BSP
-        const bspRoot = this.splitContainer({ x: 1, y: 1, w: this.width - 2, h: this.height - 2 }, 4);
+        const bspRoot = this.splitContainer({ x: 1, y: 1, w: this.width - 2, h: this.height - 2 }, 5);
         const leaves = this.getLeaves(bspRoot);
 
         // 3. Create rooms in the leaves
         for (const leaf of leaves) {
-            // Ensure room dimensions are at least 4x4
-            const roomW = Math.max(4, Math.floor(Math.random() * (leaf.w - 4)) + 4);
-            const roomH = Math.max(4, Math.floor(Math.random() * (leaf.h - 4)) + 4);
-            const roomX = leaf.x + Math.floor(Math.random() * (leaf.w - roomW + 1));
-            const roomY = leaf.y + Math.floor(Math.random() * (leaf.h - roomH + 1));
+            // Ensure room dimensions are at least 4x4 and max 8x8
+            const maxW = Math.min(8, leaf.w - 2);
+            const maxH = Math.min(8, leaf.h - 2);
+
+            if (maxW < 4 || maxH < 4) continue;
+
+            const roomW = Math.floor(Math.random() * (maxW - 4 + 1)) + 4;
+            const roomH = Math.floor(Math.random() * (maxH - 4 + 1)) + 4;
+            const roomX = leaf.x + 1 + Math.floor(Math.random() * (leaf.w - 2 - roomW + 1));
+            const roomY = leaf.y + 1 + Math.floor(Math.random() * (leaf.h - 2 - roomH + 1));
             
             const room = {
                 x: roomX, y: roomY, w: roomW, h: roomH,
@@ -43,6 +46,18 @@ export default class GridSystem {
 
         // 4. Connect the rooms
         this.connectBSPNodes(bspRoot);
+
+        // 4.5 Add extra random connections for twists and loops
+        if (this.rooms.length > 0) {
+            const extraCorridors = Math.floor(this.rooms.length * 0.5);
+            for (let i = 0; i < extraCorridors; i++) {
+                const r1 = this.rooms[Math.floor(Math.random() * this.rooms.length)];
+                const r2 = this.rooms[Math.floor(Math.random() * this.rooms.length)];
+                if (r1 !== r2) {
+                    this.createCorridor(r1.cx, r1.cy, r2.cx, r2.cy);
+                }
+            }
+        }
 
         // 5. Designate spawn rooms (e.g., the first two rooms) and add some features
         if (this.rooms.length > 0) {
@@ -63,7 +78,6 @@ export default class GridSystem {
                 if (this.grid[torchY-1] && this.grid[torchY-1][torchX] === 1) { // Check wall above
                     this.grid[torchY][torchX] = 0; // Ensure floor in front
                     this.grid[torchY-1][torchX] = 5;
-                    this.torches.push({x: torchX, y: torchY-1});
                 }
             }
         }
@@ -72,7 +86,7 @@ export default class GridSystem {
     splitContainer(container, iter) {
         const root = { ...container, left: null, right: null };
         
-        if (iter <= 0 || (container.w < 12 && container.h < 12)) {
+        if (iter <= 0 || (container.w < 7 && container.h < 7)) {
             return root;
         }
 
@@ -82,10 +96,10 @@ export default class GridSystem {
         if (container.w > container.h && container.w / container.h >= 1.1) splitH = false;
         else if (container.h > container.w && container.h / container.w >= 1.1) splitH = true;
 
-        const max = (splitH ? container.h : container.w) - 8; // Min size 8
-        if (max <= 10) return root; // Too small to split
+        const max = (splitH ? container.h : container.w) - 4; // Min size 4
+        if (max <= 4) return root; // Too small to split
 
-        const splitAt = Math.floor(Math.random() * (max - 10)) + 10;
+        const splitAt = Math.floor(Math.random() * (max - 4)) + 4;
 
         if (splitH) {
             root.left = this.splitContainer({ x: container.x, y: container.y, w: container.w, h: splitAt }, iter - 1);
@@ -133,14 +147,38 @@ export default class GridSystem {
     }
 
     createCorridor(x1, y1, x2, y2) {
-        // Horizontal then Vertical
-        const startX = Math.min(x1, x2);
-        const endX = Math.max(x1, x2);
-        for (let x = startX; x <= endX; x++) this.grid[y1][x] = 0;
-        
-        const startY = Math.min(y1, y2);
-        const endY = Math.max(y1, y2);
-        for (let y = startY; y <= endY; y++) this.grid[y][x2] = 0;
+        const drawH = (y, xStart, xEnd) => {
+            const min = Math.min(xStart, xEnd);
+            const max = Math.max(xStart, xEnd);
+            for (let x = min; x <= max; x++) {
+                if (y >= 0 && y < this.height && x >= 0 && x < this.width) this.grid[y][x] = 0;
+            }
+        };
+        const drawV = (x, yStart, yEnd) => {
+            const min = Math.min(yStart, yEnd);
+            const max = Math.max(yStart, yEnd);
+            for (let y = min; y <= max; y++) {
+                if (y >= 0 && y < this.height && x >= 0 && x < this.width) this.grid[y][x] = 0;
+            }
+        };
+
+        // 50% chance for Z-shape (Twist), 50% for L-shape
+        if (Math.random() < 0.5) {
+            const midX = Math.floor(x1 + (x2 - x1) * (0.3 + Math.random() * 0.4));
+            const midY = Math.floor(y1 + (y2 - y1) * (0.3 + Math.random() * 0.4));
+            if (Math.random() < 0.5) {
+                drawH(y1, x1, midX);
+                drawV(midX, y1, y2);
+                drawH(y2, midX, x2);
+            } else {
+                drawV(x1, y1, midY);
+                drawH(midY, x1, x2);
+                drawV(x2, midY, y2);
+            }
+        } else {
+            if (Math.random() < 0.5) { drawH(y1, x1, x2); drawV(x2, y1, y2); }
+            else { drawV(x1, y1, y2); drawH(y2, x1, x2); }
+        }
     }
 
     isWalkable(x, y) {

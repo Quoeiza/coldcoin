@@ -51,7 +51,7 @@ export default class RenderSystem {
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 
-    drawGrid(grid, width, height, playerPos, torches) {
+    drawFloor(grid, width, height) {
         if (!grid || !grid.length) return;
 
         const ts = this.tileSize;
@@ -65,13 +65,13 @@ export default class RenderSystem {
         const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
         const viewBounds = { startCol, endCol, startRow, endRow };
 
-        // --- Pass 1: Draw base walls and floors with TileMapManager ---
+        // --- Pass 1: Draw base floors with TileMapManager ---
         this.ctx.save();
         this.ctx.translate(-camX, -camY);
-        this.tileMapManager.draw(this.ctx, grid, viewBounds);
+        this.tileMapManager.drawFloor(this.ctx, grid, viewBounds);
         this.ctx.restore();
 
-        // --- Pass 2: Draw procedural tiles and apply lighting overlay ---
+        // --- Pass 2: Draw procedural floor tiles ---
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
                 if (y < 0 || y >= height || x < 0 || x >= width) continue;
@@ -91,16 +91,7 @@ export default class RenderSystem {
                     const n = noise(x, y);
 
                     // Re-add procedural rendering for special tiles
-                    if (tile === 5) { // Wall Torch
-                        // The wall/floor underneath is already drawn. We just add the torch.
-                        this.ctx.fillStyle = '#8B4513';
-                        this.ctx.fillRect(screenX + (ts * 0.375), screenY + (ts * 0.3125), ts * 0.25, ts * 0.3125);
-                        const flicker = Math.random() * (ts * 0.125);
-                        this.ctx.fillStyle = `rgba(255, ${100 + flicker * 20}, 0, 0.8)`;
-                        this.ctx.beginPath();
-                        this.ctx.arc(screenX + (ts * 0.5), screenY + (ts * 0.25), (ts * 0.125) + flicker/2, 0, Math.PI*2);
-                        this.ctx.fill();
-                    } else if (tile === 2) { // Water
+                    if (tile === 2) { // Water
                         const offset = Math.sin(Date.now() / 500 + x) * (ts * 0.15);
                         this.ctx.fillStyle = `rgb(20, 40, ${100 + offset})`;
                         this.ctx.fillRect(screenX, screenY, ts, ts);
@@ -128,33 +119,78 @@ export default class RenderSystem {
                         this.ctx.strokeRect(screenX + (ts * 0.125), screenY + (ts * 0.125), ts - (ts * 0.25), ts - (ts * 0.25));
                     }
                 }
+            }
+        }
+    }
 
-                // --- Pass 3: Apply Lighting Overlay to everything ---
-                const screenX = (x * ts) - camX;
-                const screenY = (y * ts) - camY;
-                let brightness = 0;
-                if (isVisible && playerPos) {
-                    const dist = Math.sqrt((x - playerPos.x) ** 2 + (y - playerPos.y) ** 2);
-                    brightness = Math.max(0, 1 - Math.pow(dist / 8.5, 2));
-                     if (torches) {
-                        for (const torch of torches) {
-                            const tDist = Math.sqrt((x - torch.x) ** 2 + (y - torch.y) ** 2);
-                            if (tDist < 6) {
-                                const tBright = Math.max(0, 1 - Math.pow(tDist / 6, 2));
-                                brightness = Math.max(brightness, tBright);
-                            }
-                        }
+    drawWalls(grid, width, height) {
+        if (!grid || !grid.length) return;
+
+        const ts = this.tileSize;
+        const camX = Math.floor(this.camera.x);
+        const camY = Math.floor(this.camera.y);
+        
+        // Define view bounds for culling
+        const startCol = Math.floor(camX / ts);
+        const endCol = startCol + (this.canvas.width / this.scale / ts) + 2;
+        const startRow = Math.floor(camY / ts);
+        const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
+        const viewBounds = { startCol, endCol, startRow, endRow };
+
+        // --- Pass 1: Draw base walls with TileMapManager ---
+        this.ctx.save();
+        this.ctx.translate(-camX, -camY);
+        this.tileMapManager.drawWalls(this.ctx, grid, viewBounds);
+        this.ctx.restore();
+
+        // --- Pass 2: Draw procedural wall tiles ---
+        for (let y = startRow; y <= endRow; y++) {
+            for (let x = startCol; x <= endCol; x++) {
+                if (y < 0 || y >= height || x < 0 || x >= width) continue;
+
+                const key = `${x},${y}`;
+                const isVisible = this.visible.has(key);
+                const isExplored = this.explored.has(key);
+
+                if (!isExplored && !isVisible) continue;
+
+                const tile = grid[y][x];
+                if (tile !== 0 && tile !== 1) {
+                    const screenX = (x * ts) - camX;
+                    const screenY = (y * ts) - camY;
+
+                    if (tile === 5) { // Wall Torch
+                        this.ctx.fillStyle = '#8B4513';
+                        this.ctx.fillRect(screenX + (ts * 0.375), screenY + (ts * 0.3125), ts * 0.25, ts * 0.3125);
+                        const flicker = Math.random() * (ts * 0.125);
+                        this.ctx.fillStyle = `rgba(255, ${100 + flicker * 20}, 0, 0.8)`;
+                        this.ctx.beginPath();
+                        this.ctx.arc(screenX + (ts * 0.5), screenY + (ts * 0.25), (ts * 0.125) + flicker/2, 0, Math.PI*2);
+                        this.ctx.fill();
                     }
-                } else if (isExplored) {
-                    brightness = 0.3;
-                }
-
-                if (brightness < 1.0) {
-                    this.ctx.fillStyle = `rgba(0, 0, 0, ${1 - brightness})`;
-                    this.ctx.fillRect(screenX, screenY, ts, ts);
                 }
             }
         }
+    }
+
+    drawRoof(grid, width, height) {
+        if (!grid || !grid.length) return;
+
+        const ts = this.tileSize;
+        const camX = Math.floor(this.camera.x);
+        const camY = Math.floor(this.camera.y);
+        
+        // Define view bounds for culling
+        const startCol = Math.floor(camX / ts);
+        const endCol = startCol + (this.canvas.width / this.scale / ts) + 2;
+        const startRow = Math.floor(camY / ts);
+        const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
+        const viewBounds = { startCol, endCol, startRow, endRow };
+
+        this.ctx.save();
+        this.ctx.translate(-camX, -camY);
+        this.tileMapManager.drawRoof(this.ctx, grid, viewBounds);
+        this.ctx.restore();
     }
 
     triggerShake(intensity, duration) {
@@ -708,11 +744,13 @@ export default class RenderSystem {
             this.ctx.translate(dx, dy);
         }
 
-        this.drawGrid(grid, grid[0].length, grid.length, myPos, grid.torches);
+        this.drawFloor(grid, grid[0].length, grid.length);
+        this.drawWalls(grid, grid[0].length, grid.length);
         this.drawLoot(loot);
         this.drawProjectiles(projectiles);
         this.drawEntities(entities, localPlayerId);
         this.drawEffects();
+        this.drawRoof(grid, grid[0].length, grid.length);
         
         this.ctx.restore(); // Restore shake
 
