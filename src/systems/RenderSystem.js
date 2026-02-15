@@ -801,19 +801,18 @@ export default class RenderSystem {
         sCtx.save();
         
         // A. Draw Shadow Volumes
+        // Optimization: Draw opaque first to merge overlaps (prevents banding), then apply alpha/blur once.
         sCtx.globalCompositeOperation = 'source-over';
-        sCtx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Match ambient
-        sCtx.filter = 'blur(4px)'; // Slight blur for soft shadows
+        sCtx.fillStyle = '#14131f'; // Match ambient RGB (20, 19, 31)
+        sCtx.filter = 'none'; 
 
         for (const wall of casters) {
             this.drawShadowVolume(sCtx, wall.x, wall.y, wall.w, 1, px, py, radius, lOffX, lOffY);
         }
 
         // B. Mask out ALL Walls (Prevents "Green Circle" issue)
-        // This ensures a wall tile never has a shadow drawn on top of it.
         sCtx.globalCompositeOperation = 'destination-out';
-        sCtx.filter = 'none'; // Sharp cutout for walls
-        sCtx.fillStyle = '#FFFFFF';
+        sCtx.fillStyle = '#FFFFFF'; // Alpha 1.0 to fully erase
 
         for (const wall of maskers) {
             const tx = Math.floor((wall.x * ts) - this.camera.x);
@@ -824,7 +823,15 @@ export default class RenderSystem {
 
         // 6. Apply Shadows to Light Layer
         ctx.save();
+        // Optimization: Clip shadows to the light radius to prevent darkening the ambient area further
+        // This prevents "double darkness" artifacts outside the torch range.
+        ctx.beginPath();
+        ctx.arc(sx, sy, screenRadius, 0, Math.PI * 2);
+        ctx.clip();
+
         ctx.globalCompositeOperation = 'source-over';
+        ctx.filter = 'blur(4px)'; // Blur the merged shadow map for soft edges
+        ctx.globalAlpha = 0.9; // Apply ambient opacity here
         ctx.drawImage(this.shadowCanvas, 0, 0);
         ctx.restore();
 
