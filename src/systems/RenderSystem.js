@@ -698,8 +698,14 @@ export default class RenderSystem {
         const py = playerVisual.y;
         
         // Calculate Screen Coordinates
-        const sx = Math.floor((px * ts) - this.camera.x + (ts * 0.5));
-        const sy = Math.floor((py * ts) - this.camera.y + (ts * 0.5));
+        // Offset light to player's center (0.5) to align with sprite.
+        // Lower values (e.g. 0.8) cause light to peek over walls too early (flooding).
+        const lOffX = 0.5;
+        const lOffY = 0.5;
+
+        // Use float coordinates for smooth lighting, matching shadow volume calculations
+        const sx = (px * ts) - this.camera.x + (ts * lOffX);
+        const sy = (py * ts) - this.camera.y + (ts * lOffY);
         const screenRadius = radius * ts;
 
         ctx.save();
@@ -800,7 +806,7 @@ export default class RenderSystem {
         sCtx.filter = 'blur(4px)'; // Slight blur for soft shadows
 
         for (const wall of casters) {
-            this.drawShadowVolume(sCtx, wall.x, wall.y, wall.w, 1, px, py, radius);
+            this.drawShadowVolume(sCtx, wall.x, wall.y, wall.w, 1, px, py, radius, lOffX, lOffY);
         }
 
         // B. Mask out ALL Walls (Prevents "Green Circle" issue)
@@ -838,20 +844,44 @@ export default class RenderSystem {
         this.ctx.restore();
     }
 
-    drawShadowVolume(ctx, gx, gy, gw, gh, lx, ly, radius) {
+    drawShadowVolume(ctx, gx, gy, gw, gh, lx, ly, radius, lOffX = 0.5, lOffY = 0.5) {
         const ts = this.tileSize;
         const tx = (gx * ts) - this.camera.x;
         const ty = (gy * ts) - this.camera.y;
+        
+        // FIX: Use full tile size for shadows as requested.
         const tw = gw * ts;
         const th = gh * ts;
-        const lsx = (lx * ts) - this.camera.x + (ts * 0.5);
-        const lsy = (ly * ts) - this.camera.y + (ts * 0.5);
+
+        let lsx = (lx * ts) - this.camera.x + (ts * lOffX);
+        let lsy = (ly * ts) - this.camera.y + (ts * lOffY);
+
+        // FIX: Handle Light Source inside Caster (GridSystem overlap).
+        // If light is inside, snap it to the nearest edge to preserve occlusion
+        // without causing shadow explosion.
+        if (lsx > tx && lsx < tx + tw && lsy > ty && lsy < ty + th) {
+            const dL = lsx - tx;
+            const dR = (tx + tw) - lsx;
+            const dT = lsy - ty;
+            const dB = (ty + th) - lsy;
+            
+            const min = Math.min(dL, dR, dT, dB);
+            const snap = 2; 
+            
+            if (min === dL) lsx = tx - snap;
+            else if (min === dR) lsx = tx + tw + snap;
+            else if (min === dT) lsy = ty - snap;
+            else if (min === dB) lsy = ty + th + snap;
+        }
+
+        // Small epsilon to prevent float precision z-fighting on edges
+        const pad = 1;
 
         const corners = [
-            { x: tx, y: ty },
-            { x: tx + tw, y: ty },
-            { x: tx + tw, y: ty + th },
-            { x: tx, y: ty + th }
+            { x: tx + pad, y: ty + pad },
+            { x: tx + tw - pad, y: ty + pad },
+            { x: tx + tw - pad, y: ty + th - pad },
+            { x: tx + pad, y: ty + th - pad }
         ];
 
         const points = [];
@@ -871,20 +901,39 @@ export default class RenderSystem {
             }
         });
 
-        let cx = 0, cy = 0;
-        points.forEach(p => { cx += p.x; cy += p.y; });
-        cx /= points.length;
-        cy /= points.length;
-
-        points.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+        // Use Robust Convex Hull (Monotone Chain) instead of Centroid Sort
+        // Centroid sort fails when light is very close to the object (concave wrapping).
+        const hull = this.computeConvexHull(points);
 
         ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) {
-            ctx.lineTo(points[i].x, points[i].y);
+        if (hull.length > 0) {
+            ctx.moveTo(hull[0].x, hull[0].y);
+            for (let i = 1; i < hull.length; i++) {
+                ctx.lineTo(hull[i].x, hull[i].y);
+            }
         }
         ctx.closePath();
         ctx.fill();
+    }
+
+    computeConvexHull(points) {
+        // Monotone Chain Algorithm
+        points.sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+        const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+        const lower = [];
+        for (let p of points) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+            lower.push(p);
+        }
+        const upper = [];
+        for (let i = points.length - 1; i >= 0; i--) {
+            const p = points[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+            upper.push(p);
+        }
+        upper.pop(); lower.pop();
+        return lower.concat(upper);
     }
 
     render(grid, entities, loot, projectiles, interaction, localPlayerId) {
