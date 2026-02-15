@@ -1,3 +1,5 @@
+import { TileMapManager, dungeonTilesetConfig } from './TileMapManager.js';
+
 const noise = (x, y) => {
     return Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
 };
@@ -9,9 +11,12 @@ export default class RenderSystem {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
         this.ctx.imageSmoothingEnabled = false;
-        this.tileSize = tileSize || 48; // Ensure default if undefined
+        this.tileSize = tileSize || 48; // Match tile manager config
         this.scale = 2;
-        
+
+        // TileMap Manager for sprite-based rendering
+        this.tileMapManager = new TileMapManager(dungeonTilesetConfig);
+
         // Camera
         this.camera = { x: 0, y: 0 };
         
@@ -29,6 +34,10 @@ export default class RenderSystem {
 
     setAssetLoader(loader) {
         this.assetLoader = loader;
+        // After setting the loader, immediately start loading the tilemap assets
+        this.tileMapManager.loadAssets(loader).catch(err => {
+            console.error("Failed to load tilemap assets:", err);
+        });
     }
 
     resize() {
@@ -44,153 +53,103 @@ export default class RenderSystem {
 
     drawGrid(grid, width, height, playerPos, torches) {
         if (!grid || !grid.length) return;
-        if (this.tileSize < 1) this.tileSize = 48; // Safety fallback
 
-        // Hard clamp camera to prevent infinite loops from huge numbers
-        if (this.camera.x < -50000) this.camera.x = -50000;
-        if (this.camera.x > 50000) this.camera.x = 50000;
-        if (this.camera.y < -50000) this.camera.y = -50000;
-        if (this.camera.y > 50000) this.camera.y = 50000;
+        const ts = this.tileSize;
+        
+        // Define view bounds for culling
+        const startCol = Math.floor(this.camera.x / ts);
+        const endCol = startCol + (this.canvas.width / this.scale / ts) + 2;
+        const startRow = Math.floor(this.camera.y / ts);
+        const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
+        const viewBounds = { startCol, endCol, startRow, endRow };
 
-        const startCol = Math.floor(this.camera.x / this.tileSize);
-        const endCol = startCol + (this.canvas.width / this.scale / this.tileSize) + 1;
-        const startRow = Math.floor(this.camera.y / this.tileSize);
-        const endRow = startRow + (this.canvas.height / this.scale / this.tileSize) + 1;
+        // --- Pass 1: Draw base walls and floors with TileMapManager ---
+        this.ctx.save();
+        this.ctx.translate(-this.camera.x, -this.camera.y);
+        this.tileMapManager.draw(this.ctx, grid, viewBounds);
+        this.ctx.restore();
 
-        // Safety break for loop bounds
-        if (endCol - startCol > 500 || endRow - startRow > 500) return;
-
+        // --- Pass 2: Draw procedural tiles and apply lighting overlay ---
         for (let y = startRow; y <= endRow; y++) {
             for (let x = startCol; x <= endCol; x++) {
-                if (y >= 0 && y < height && x >= 0 && x < width) {
-                    const key = `${x},${y}`;
-                    const isVisible = this.visible.has(key);
-                    const isExplored = this.explored.has(key);
+                if (y < 0 || y >= height || x < 0 || x >= width) continue;
 
-                    if (!isExplored && !isVisible) {
-                        // Draw nothing (black background)
-                        continue;
-                    }
+                const key = `${x},${y}`;
+                const isVisible = this.visible.has(key);
+                const isExplored = this.explored.has(key);
 
-                    if (!grid[y]) continue; // Safety check for row existence
-                    const tile = grid[y][x];
-                    const screenX = Math.floor((x * this.tileSize) - this.camera.x);
-                    const screenY = Math.floor((y * this.tileSize) - this.camera.y);
+                if (!isExplored && !isVisible) continue;
 
-                    // Lighting Calculation
-                    let brightness = 0;
-                    if (isVisible && playerPos) {
-                        const dist = Math.sqrt((x - playerPos.x) ** 2 + (y - playerPos.y) ** 2);
-                        // Non-linear falloff for "torch" look
-                        brightness = Math.max(0, 1 - Math.pow(dist / 8.5, 2)); 
-
-                        // Add Torch Light
-                        if (torches) {
-                            for (const torch of torches) {
-                                const tDist = Math.sqrt((x - torch.x) ** 2 + (y - torch.y) ** 2);
-                                if (tDist < 6) {
-                                    const tBright = Math.max(0, 1 - Math.pow(tDist / 6, 2));
-                                    brightness = Math.max(brightness, tBright);
-                                }
-                            }
-                        }
-                    } else if (isExplored) {
-                        brightness = 0.3; // Increased visibility for explored areas (shrouded)
-                    }
-
-                    // Base Colors (Grim Palette)
+                const tile = grid[y][x];
+                // TileMapManager has already drawn the base for tiles 0 and 1.
+                // We only need to render the *additional* procedural parts.
+                if (tile !== 0 && tile !== 1) {
+                    const screenX = Math.floor((x * ts) - this.camera.x);
+                    const screenY = Math.floor((y * ts) - this.camera.y);
                     const n = noise(x, y);
-                    
-                    // Draw Tile
-                    if (tile === 1) {
-                        // Wall
-                        const wallHeight = Math.floor(this.tileSize * 0.4);
-                        
-                        // Top Face
-                        const topColor = Math.floor(15 + n * 10); // Darker walls
-                        this.ctx.fillStyle = `rgb(${topColor}, ${topColor}, ${topColor})`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize - wallHeight);
-                        
-                        // Front Face
-                        const frontColor = Math.floor(5 + n * 5); // Very dark front face
-                        this.ctx.fillStyle = `rgb(${frontColor}, ${frontColor}, ${frontColor})`;
-                        this.ctx.fillRect(screenX, screenY + (this.tileSize - wallHeight), this.tileSize, wallHeight);
-                        
-                        // Detail (Cracks)
-                        if (n > 0.8) {
-                            this.ctx.fillStyle = '#000';
-                            this.ctx.fillRect(screenX + n * (this.tileSize * 0.625), screenY + (this.tileSize * 0.15), this.tileSize * 0.06, this.tileSize * 0.18);
-                        }
-                    } else if (tile === 5) {
-                        // Wall Torch
-                        const wallHeight = Math.floor(this.tileSize * 0.4);
-                        const topColor = Math.floor(15 + n * 10);
-                        this.ctx.fillStyle = `rgb(${topColor}, ${topColor}, ${topColor})`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize - wallHeight);
-                        
-                        const frontColor = Math.floor(5 + n * 5);
-                        this.ctx.fillStyle = `rgb(${frontColor}, ${frontColor}, ${frontColor})`;
-                        this.ctx.fillRect(screenX, screenY + (this.tileSize - wallHeight), this.tileSize, wallHeight);
 
-                        // Torch Wood
+                    // Re-add procedural rendering for special tiles
+                    if (tile === 5) { // Wall Torch
+                        // The wall/floor underneath is already drawn. We just add the torch.
                         this.ctx.fillStyle = '#8B4513';
-                        this.ctx.fillRect(screenX + (this.tileSize * 0.375), screenY + (this.tileSize * 0.3125), this.tileSize * 0.25, this.tileSize * 0.3125);
-                        
-                        // Flame
-                        const flicker = Math.random() * (this.tileSize * 0.125);
+                        this.ctx.fillRect(screenX + (ts * 0.375), screenY + (ts * 0.3125), ts * 0.25, ts * 0.3125);
+                        const flicker = Math.random() * (ts * 0.125);
                         this.ctx.fillStyle = `rgba(255, ${100 + flicker * 20}, 0, 0.8)`;
                         this.ctx.beginPath();
-                        this.ctx.arc(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.25), (this.tileSize * 0.125) + flicker/2, 0, Math.PI*2);
+                        this.ctx.arc(screenX + (ts * 0.5), screenY + (ts * 0.25), (ts * 0.125) + flicker/2, 0, Math.PI*2);
                         this.ctx.fill();
-                    } else if (tile === 2) {
-                        // Water
-                        const offset = Math.sin(Date.now() / 500 + x) * (this.tileSize * 0.15);
+                    } else if (tile === 2) { // Water
+                        const offset = Math.sin(Date.now() / 500 + x) * (ts * 0.15);
                         this.ctx.fillStyle = `rgb(20, 40, ${100 + offset})`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
+                        this.ctx.fillRect(screenX, screenY, ts, ts);
                         this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
-                        this.ctx.fillRect(screenX + (this.tileSize * 0.15), screenY + (this.tileSize * 0.15) + offset, this.tileSize * 0.3, this.tileSize * 0.06);
-                    } else if (tile === 3) {
-                        // Mud
+                        this.ctx.fillRect(screenX + (ts * 0.15), screenY + (ts * 0.15) + offset, ts * 0.3, ts * 0.06);
+                    } else if (tile === 3) { // Mud
                         this.ctx.fillStyle = '#3e2723';
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
+                        this.ctx.fillRect(screenX, screenY, ts, ts);
                         if (n > 0.5) {
                             this.ctx.fillStyle = '#281a15';
-                            this.ctx.fillRect(screenX + (this.tileSize * 0.15), screenY + (this.tileSize * 0.15), this.tileSize * 0.15, this.tileSize * 0.15);
+                            this.ctx.fillRect(screenX + (ts * 0.15), screenY + (ts * 0.15), ts * 0.15, ts * 0.15);
                         }
-                    } else if (tile === 4) {
-                        // Lava
+                    } else if (tile === 4) { // Lava
                         const pulse = Math.sin(Date.now() / 300);
                         this.ctx.fillStyle = `rgb(${200 + pulse * 50}, 50, 0)`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
+                        this.ctx.fillRect(screenX, screenY, ts, ts);
                         this.ctx.fillStyle = '#ffeb3b';
-                        if (n > 0.7) this.ctx.fillRect(screenX + n*(this.tileSize * 0.625), screenY + n*(this.tileSize * 0.625), this.tileSize * 0.125, this.tileSize * 0.125);
-                    } else if (tile === 9) {
-                        // Extraction Zone - Pulsing
+                        if (n > 0.7) this.ctx.fillRect(screenX + n*(ts * 0.625), screenY + n*(ts * 0.625), ts * 0.125, ts * 0.125);
+                    } else if (tile === 9) { // Extraction Zone
                         const pulse = (Math.sin(Date.now() / 200) + 1) / 2;
                         this.ctx.fillStyle = `rgba(0, 255, 255, ${0.1 + pulse * 0.2})`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
-                        
+                        this.ctx.fillRect(screenX, screenY, ts, ts);
                         this.ctx.strokeStyle = `rgba(0, 255, 255, ${0.5 + pulse * 0.5})`;
                         this.ctx.lineWidth = 2;
-                        this.ctx.strokeRect(screenX + (this.tileSize * 0.125), screenY + (this.tileSize * 0.125), this.tileSize - (this.tileSize * 0.25), this.tileSize - (this.tileSize * 0.25));
-                    } else {
-                        // Floor - Textured
-                        const floorBase = Math.floor(40 + n * 10); // Lighter floor for contrast
-                        this.ctx.fillStyle = `rgb(${floorBase}, ${floorBase}, ${floorBase + 5})`; // Slight blue tint
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
-                        
-                        // Grit
-                        if (n > 0.5) {
-                            this.ctx.fillStyle = 'rgba(0,0,0,0.2)';
-                            this.ctx.fillRect(screenX + (n * 100) % this.tileSize, screenY + (n * 50) % this.tileSize, Math.max(1, this.tileSize * 0.03), Math.max(1, this.tileSize * 0.03));
+                        this.ctx.strokeRect(screenX + (ts * 0.125), screenY + (ts * 0.125), ts - (ts * 0.25), ts - (ts * 0.25));
+                    }
+                }
+
+                // --- Pass 3: Apply Lighting Overlay to everything ---
+                const screenX = Math.floor((x * ts) - this.camera.x);
+                const screenY = Math.floor((y * ts) - this.camera.y);
+                let brightness = 0;
+                if (isVisible && playerPos) {
+                    const dist = Math.sqrt((x - playerPos.x) ** 2 + (y - playerPos.y) ** 2);
+                    brightness = Math.max(0, 1 - Math.pow(dist / 8.5, 2));
+                     if (torches) {
+                        for (const torch of torches) {
+                            const tDist = Math.sqrt((x - torch.x) ** 2 + (y - torch.y) ** 2);
+                            if (tDist < 6) {
+                                const tBright = Math.max(0, 1 - Math.pow(tDist / 6, 2));
+                                brightness = Math.max(brightness, tBright);
+                            }
                         }
                     }
+                } else if (isExplored) {
+                    brightness = 0.3;
+                }
 
-                    // Apply Lighting Overlay
-                    if (brightness < 1.0) {
-                        this.ctx.fillStyle = `rgba(0, 0, 0, ${1 - brightness})`;
-                        this.ctx.fillRect(screenX, screenY, this.tileSize, this.tileSize);
-                    }
+                if (brightness < 1.0) {
+                    this.ctx.fillStyle = `rgba(0, 0, 0, ${1 - brightness})`;
+                    this.ctx.fillRect(screenX, screenY, ts, ts);
                 }
             }
         }

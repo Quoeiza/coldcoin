@@ -16,32 +16,57 @@ export default class GridSystem {
         this.torches = [];
         this.spawnRooms = []; // Special rooms for player spawns
         this.spatialMap.clear();
+
+        // 2. Create dungeon layout with BSP
+        const bspRoot = this.splitContainer({ x: 1, y: 1, w: this.width - 2, h: this.height - 2 }, 4);
+        const leaves = this.getLeaves(bspRoot);
+
+        // 3. Create rooms in the leaves
+        for (const leaf of leaves) {
+            // Ensure room dimensions are at least 4x4
+            const roomW = Math.max(4, Math.floor(Math.random() * (leaf.w - 4)) + 4);
+            const roomH = Math.max(4, Math.floor(Math.random() * (leaf.h - 4)) + 4);
+            const roomX = leaf.x + Math.floor(Math.random() * (leaf.w - roomW + 1));
+            const roomY = leaf.y + Math.floor(Math.random() * (leaf.h - roomH + 1));
+            
+            const room = {
+                x: roomX, y: roomY, w: roomW, h: roomH,
+                cx: roomX + Math.floor(roomW / 2),
+                cy: roomY + Math.floor(roomH / 2),
+                isSpawn: false
+            };
+            
+            this.createRoom(room);
+            this.rooms.push(room);
+            leaf.room = room; // Attach room to leaf for corridor connection
+        }
+
+        // 4. Connect the rooms
+        this.connectBSPNodes(bspRoot);
+
+        // 5. Designate spawn rooms (e.g., the first two rooms) and add some features
+        if (this.rooms.length > 0) {
+            this.spawnRooms = this.rooms.slice(0, Math.min(2, this.rooms.length)).map(r => { 
+                r.isSpawn = true; 
+                return r; 
+            });
+        }
         
-        // TEST MODE: Single Room (20x20) centered
-        const roomW = 20;
-        const roomH = 20;
-        const roomX = Math.floor((this.width - roomW) / 2);
-        const roomY = Math.floor((this.height - roomH) / 2);
+        this.addFeature(2, 10, 5); // Add up to 10 pools of water (2) of max size 5
+        this.addFeature(3, 5, 4);  // Add up to 5 patches of mud (3) of max size 4
 
-        const room = {
-            x: roomX,
-            y: roomY,
-            w: roomW,
-            h: roomH,
-            cx: roomX + Math.floor(roomW/2),
-            cy: roomY + Math.floor(roomH/2),
-            isSpawn: true
-        };
-
-        this.createRoom(room);
-        this.rooms.push(room);
-        this.spawnRooms.push(room);
-
-        // Add corner torches
-        this.grid[roomY][roomX] = 5; this.torches.push({x: roomX, y: roomY});
-        this.grid[roomY][roomX + roomW - 1] = 5; this.torches.push({x: roomX + roomW - 1, y: roomY});
-        this.grid[roomY + roomH - 1][roomX] = 5; this.torches.push({x: roomX, y: roomY + roomH - 1});
-        this.grid[roomY + roomH - 1][roomX + roomW - 1] = 5; this.torches.push({x: roomX + roomW - 1, y: roomY + roomH - 1});
+        // 6. Place torches on some room walls
+        for (const room of this.rooms) {
+            if (Math.random() > 0.5) {
+                const torchX = room.cx;
+                const torchY = room.y; // Place on top wall of room
+                if (this.grid[torchY-1] && this.grid[torchY-1][torchX] === 1) { // Check wall above
+                    this.grid[torchY][torchX] = 0; // Ensure floor in front
+                    this.grid[torchY-1][torchX] = 5;
+                    this.torches.push({x: torchX, y: torchY-1});
+                }
+            }
+        }
     }
 
     splitContainer(container, iter) {
@@ -360,6 +385,32 @@ export default class GridSystem {
 
         combatSystem.registerEntity(id, type, false);
         console.log(`GridSystem: Spawned test enemy ${type} (${id}) at ${spawn.x},${spawn.y}`);
+    }
+
+    addFeature(tileType, count, maxSize) {
+        if (!this.rooms || this.rooms.length === 0) return;
+
+        for (let i = 0; i < count; i++) {
+            const room = this.rooms[Math.floor(Math.random() * this.rooms.length)];
+            if (room.isSpawn) continue;
+
+            const size = Math.floor(Math.random() * maxSize) + 2;
+            if (room.w <= size + 2 || room.h <= size + 2) continue; // Ensure room is large enough
+
+            const startX = room.x + 1 + Math.floor(Math.random() * (room.w - size - 1));
+            const startY = room.y + 1 + Math.floor(Math.random() * (room.h - size - 1));
+
+            for (let y = startY; y < startY + size; y++) {
+                for (let x = startX; x < startX + size; x++) {
+                    // Check bounds just in case
+                    if (x < room.x + room.w -1 && y < room.y + room.h -1) {
+                        if (Math.random() > 0.35) { // Jagged shape
+                            this.grid[y][x] = tileType;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     findPath(startX, startY, endX, endY) {
