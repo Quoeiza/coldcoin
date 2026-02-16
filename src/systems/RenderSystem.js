@@ -870,7 +870,7 @@ export default class RenderSystem {
         // Optimization: Draw opaque first to merge overlaps (prevents banding).
         // Apply blur HERE so that the shadow volume is soft, but we can mask it sharply later.
         sCtx.globalCompositeOperation = 'source-over';
-        sCtx.fillStyle = '#14131f'; // Match ambient RGB (20, 19, 31)
+        sCtx.fillStyle = '#FFFFFF'; // White for Masking
         sCtx.filter = 'blur(4px)'; 
 
         for (const wall of this.shadowCasters) {
@@ -894,27 +894,8 @@ export default class RenderSystem {
             sCtx.fillRect(tx, ty, wall.w * ts, ts);
         }
 
-        // C. Soften Shadow Edges (Gradient Mask)
-        // Fade shadows out as they approach the max radius to blend with ambient darkness
-        sCtx.globalCompositeOperation = 'destination-in';
-        const maskGrad = sCtx.createRadialGradient(sx, sy, screenRadius * 0.8, sx, sy, screenRadius);
-        maskGrad.addColorStop(0, 'rgba(0, 0, 0, 1)'); 
-        maskGrad.addColorStop(1, 'rgba(0, 0, 0, 0)'); 
-        
-        sCtx.fillStyle = maskGrad;
-        sCtx.fillRect(0, 0, w, h);
-
         sCtx.restore();
-
-        // Apply Shadows to Main Canvas
-        this.ctx.save();
-        this.ctx.globalCompositeOperation = 'source-over';
-        this.ctx.filter = 'none'; 
-        this.ctx.globalAlpha = 0.9; 
-        
-        // Draw shadow map
-        this.ctx.drawImage(this.shadowCanvas, 0, 0);
-        this.ctx.restore();
+        sCtx.restore();
     }
 
     drawAmbientLayer(playerVisual) {
@@ -924,12 +905,7 @@ export default class RenderSystem {
         const ts = this.tileSize;
 
         ctx.save();
-        
-        // 1. Clear & Draw Ambient Darkness
-        ctx.globalCompositeOperation = 'source-over';
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Grimdark ambient
-        ctx.fillRect(0, 0, w, h);
 
         if (playerVisual) {
             const px = playerVisual.x;
@@ -938,8 +914,8 @@ export default class RenderSystem {
             const sy = (py * ts) - this.camera.y + (ts * 0.5);
             const screenRadius = this.lightRadius;
 
-            // 2. Cut the "Light Hole"
-            ctx.globalCompositeOperation = 'destination-out';
+            // 1. Draw Light Gradient (White)
+            ctx.globalCompositeOperation = 'source-over';
             const grad = ctx.createRadialGradient(sx, sy, ts * 1.5, sx, sy, screenRadius);
             grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
             grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.3)');
@@ -950,9 +926,21 @@ export default class RenderSystem {
             ctx.arc(sx, sy, screenRadius, 0, Math.PI * 2);
             ctx.fill();
 
-            // 3. Warm Hue Overlay (Torch Color) - Drawn directly on main canvas later? 
-            // No, we can't draw it here because this canvas is 'darkness'.
-            // We will draw the ambient map, then draw the warm overlay on main ctx.
+            // 2. Subtract Shadows (from shadowCanvas)
+            // shadowCanvas contains White Shadows. destination-out removes Light where Shadows are.
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.drawImage(this.shadowCanvas, 0, 0);
+
+            // 3. Invert to create Darkness
+            // Source-Out: Keeps Source (Dark) where Dest (Light) is Transparent.
+            ctx.globalCompositeOperation = 'source-out';
+            ctx.fillStyle = 'rgba(20, 19, 31, 0.9)'; // Grimdark ambient
+            ctx.fillRect(0, 0, w, h);
+        } else {
+            // No player? Full darkness.
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillStyle = 'rgba(20, 19, 31, 0.9)';
+            ctx.fillRect(0, 0, w, h);
         }
         ctx.restore();
 
