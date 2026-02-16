@@ -6,6 +6,7 @@ export default class GridSystem {
         this.grid = []; // 0: Floor, 1: Wall
         this.entities = new Map(); // Map<EntityID, {x, y, facing: {x, y}}>
         this.spatialMap = new Map(); // Map<int, EntityID> - Optimization for O(1) lookups
+        this.revision = 0;
     }
 
     initializeDungeon() {
@@ -82,6 +83,7 @@ export default class GridSystem {
                 }
             }
         }
+        this.revision++;
     }
 
     splitContainer(container, iter) {
@@ -451,6 +453,7 @@ export default class GridSystem {
     setTile(x, y, value) {
         if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
             this.grid[y][x] = value;
+            this.revision++;
         }
     }
 

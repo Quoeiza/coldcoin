@@ -39,6 +39,15 @@ export default class RenderSystem {
         this.visualEntities = new Map(); // id -> { x, y, targetX, targetY, startX, startY, moveStartTime, attackStart, flashStart, bumpStart, bumpDir }
         this.shake = { intensity: 0, duration: 0, startTime: 0 };
         this.assetLoader = null;
+
+        // Performance Caching
+        this.staticCacheBottom = document.createElement('canvas');
+        this.staticCtxBottom = this.staticCacheBottom.getContext('2d');
+        this.staticCacheTop = document.createElement('canvas');
+        this.staticCtxTop = this.staticCacheTop.getContext('2d');
+        this.lastGridRevision = -1;
+        this.shadowCasters = []; // Reuse array to reduce GC
+        this.shadowMaskers = []; // Reuse array to reduce GC
     }
 
     setAssetLoader(loader) {
@@ -72,6 +81,59 @@ export default class RenderSystem {
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
 
+    updateStaticCache(grid) {
+        if (!grid || !grid.length) return;
+        const h = grid.length;
+        const w = grid[0].length;
+        const ts = this.tileSize;
+
+        // Resize caches if dimensions changed
+        if (this.staticCacheBottom.width !== w * ts || this.staticCacheBottom.height !== h * ts) {
+            this.staticCacheBottom.width = w * ts;
+            this.staticCacheBottom.height = h * ts;
+            this.staticCacheTop.width = w * ts;
+            this.staticCacheTop.height = h * ts;
+        }
+
+        const ctxB = this.staticCtxBottom;
+        const ctxT = this.staticCtxTop;
+
+        // Clear
+        ctxB.clearRect(0, 0, w * ts, h * ts);
+        ctxT.clearRect(0, 0, w * ts, h * ts);
+
+        // Render entire map to cache
+        const viewBounds = { startCol: 0, endCol: w - 1, startRow: 0, endRow: h - 1 };
+
+        // 1. Bottom Layer: Floors and Walls
+        this.tileMapManager.drawFloor(ctxB, grid, viewBounds);
+        
+        // Bake static procedural floors (Mud) into the cache
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const tile = grid[y][x];
+                if (tile === 3) { // Mud
+                    const screenX = x * ts;
+                    const screenY = y * ts;
+                    const n = noise(x, y);
+                    ctxB.fillStyle = '#3e2723';
+                    ctxB.fillRect(screenX, screenY, ts, ts);
+                    if (n > 0.5) {
+                        ctxB.fillStyle = '#281a15';
+                        ctxB.fillRect(screenX + (ts * 0.15), screenY + (ts * 0.15), ts * 0.15, ts * 0.15);
+                    }
+                }
+            }
+        }
+
+        this.tileMapManager.drawWalls(ctxB, grid, viewBounds);
+
+        // 2. Top Layer: Roofs
+        this.tileMapManager.drawRoof(ctxT, grid, viewBounds);
+
+        this.lastGridRevision = this.gridSystem ? this.gridSystem.revision : -1;
+    }
+
     drawFloor(grid, width, height) {
         if (!grid || !grid.length) return;
 
@@ -86,11 +148,11 @@ export default class RenderSystem {
         const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
         const viewBounds = { startCol, endCol, startRow, endRow };
 
-        // --- Pass 1: Draw base floors with TileMapManager ---
+        // --- Pass 1: Draw Cached Static Layer ---
         this.ctx.save();
         this.ctx.translate(-camX, -camY);
-        this.tileMapManager.drawFloor(this.ctx, grid, viewBounds);
-        this.ctx.restore();
+        this.ctx.drawImage(this.staticCacheBottom, 0, 0);
+        this.ctx.restore(); // Restore translation, but we need it for the loop below? No, loop calculates screenX manually.
 
         // --- Pass 2: Draw procedural floor tiles ---
         for (let y = startRow; y <= endRow; y++) {
@@ -98,9 +160,9 @@ export default class RenderSystem {
                 if (y < 0 || y >= height || x < 0 || x >= width) continue;
 
                 const tile = grid[y][x];
-                // TileMapManager has already drawn the base for tiles 0 and 1.
-                // We only need to render the *additional* procedural parts.
-                if (tile !== 0 && tile !== 1) {
+                // Only draw DYNAMIC tiles here. Static ones (Mud) are cached.
+                // 2=Water, 4=Lava, 9=Extraction
+                if (tile === 2 || tile === 4 || tile === 9) {
                     const screenX = (x * ts) - camX;
                     const screenY = (y * ts) - camY;
                     const n = noise(x, y);
@@ -112,13 +174,6 @@ export default class RenderSystem {
                         this.ctx.fillRect(screenX, screenY, ts, ts);
                         this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
                         this.ctx.fillRect(screenX + (ts * 0.15), screenY + (ts * 0.15) + offset, ts * 0.3, ts * 0.06);
-                    } else if (tile === 3) { // Mud
-                        this.ctx.fillStyle = '#3e2723';
-                        this.ctx.fillRect(screenX, screenY, ts, ts);
-                        if (n > 0.5) {
-                            this.ctx.fillStyle = '#281a15';
-                            this.ctx.fillRect(screenX + (ts * 0.15), screenY + (ts * 0.15), ts * 0.15, ts * 0.15);
-                        }
                     } else if (tile === 4) { // Lava
                         const pulse = Math.sin(Date.now() / 300);
                         this.ctx.fillStyle = `rgb(${200 + pulse * 50}, 50, 0)`;
@@ -152,11 +207,7 @@ export default class RenderSystem {
         const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
         const viewBounds = { startCol, endCol, startRow, endRow };
 
-        // --- Pass 1: Draw base walls with TileMapManager ---
-        this.ctx.save();
-        this.ctx.translate(-camX, -camY);
-        this.tileMapManager.drawWalls(this.ctx, grid, viewBounds);
-        this.ctx.restore();
+        // Base walls are already drawn in staticCacheBottom in drawFloor
 
         // --- Pass 2: Draw procedural wall tiles ---
         for (let y = startRow; y <= endRow; y++) {
@@ -183,22 +234,11 @@ export default class RenderSystem {
     }
 
     drawRoof(grid, width, height) {
-        if (!grid || !grid.length) return;
-
-        const ts = this.tileSize;
         const camX = Math.floor(this.camera.x);
         const camY = Math.floor(this.camera.y);
-        
-        // Define view bounds for culling
-        const startCol = Math.floor(camX / ts);
-        const endCol = startCol + (this.canvas.width / this.scale / ts) + 2;
-        const startRow = Math.floor(camY / ts);
-        const endRow = startRow + (this.canvas.height / this.scale / ts) + 2;
-        const viewBounds = { startCol, endCol, startRow, endRow };
-
         this.ctx.save();
         this.ctx.translate(-camX, -camY);
-        this.tileMapManager.drawRoof(this.ctx, grid, viewBounds);
+        this.ctx.drawImage(this.staticCacheTop, 0, 0);
         this.ctx.restore();
     }
 
@@ -724,8 +764,9 @@ export default class RenderSystem {
         // 2. Maskers: ALL walls in the vicinity. These must be erased from the shadow 
         //    layer so shadows don't "draw over" the top of walls.
         
-        const casters = [];
-        const maskers = [];
+        // Reuse arrays to prevent GC
+        this.shadowCasters.length = 0;
+        this.shadowMaskers.length = 0;
 
         const iPx = Math.floor(px);
         const iPy = Math.floor(py);
@@ -764,11 +805,11 @@ export default class RenderSystem {
                     if (maskerSeg) {
                         maskerSeg.w++;
                     } else {
-                        maskerSeg = { x, y, w: 1 };
+                        maskerSeg = { x, y, w: 1 }; // Optimization: Could pool these objects too, but simple object creation is fast in V8
                     }
                 } else {
                     if (maskerSeg) {
-                        maskers.push(maskerSeg);
+                        this.shadowMaskers.push(maskerSeg);
                         maskerSeg = null;
                     }
                 }
@@ -786,14 +827,14 @@ export default class RenderSystem {
                     }
                 } else {
                     if (casterSeg) {
-                        casters.push(casterSeg);
+                        this.shadowCasters.push(casterSeg);
                         casterSeg = null;
                     }
                 }
             }
             // Flush segments at end of row
-            if (maskerSeg) maskers.push(maskerSeg);
-            if (casterSeg) casters.push(casterSeg);
+            if (maskerSeg) this.shadowMaskers.push(maskerSeg);
+            if (casterSeg) this.shadowCasters.push(casterSeg);
         }
 
         sCtx.save();
@@ -805,7 +846,7 @@ export default class RenderSystem {
         sCtx.fillStyle = '#14131f'; // Match ambient RGB (20, 19, 31)
         sCtx.filter = 'blur(4px)'; 
 
-        for (const wall of casters) {
+        for (const wall of this.shadowCasters) {
             // Draw the wall base to ensure shadow continuity under the wall before masking.
             // This prevents the "lighter edge" artifact where the blurred shadow volume meets the wall.
             const wx = (wall.x * ts) - this.camera.x;
@@ -820,7 +861,7 @@ export default class RenderSystem {
         sCtx.globalCompositeOperation = 'destination-out';
         sCtx.fillStyle = '#FFFFFF'; // Alpha 1.0 to fully erase
 
-        for (const wall of maskers) {
+        for (const wall of this.shadowMaskers) {
             const tx = Math.floor((wall.x * ts) - this.camera.x);
             const ty = Math.floor((wall.y * ts) - this.camera.y);
             sCtx.fillRect(tx, ty, wall.w * ts, ts);
@@ -1005,6 +1046,11 @@ export default class RenderSystem {
     }
 
     render(grid, entities, loot, projectiles, interaction, localPlayerId) {
+        // Check if we need to update static cache
+        if (this.gridSystem && this.gridSystem.revision !== this.lastGridRevision) {
+            this.updateStaticCache(grid);
+        }
+
         const myPos = entities.get(localPlayerId);
         
         // Camera: Match player's interpolated visual movement

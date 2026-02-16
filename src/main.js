@@ -1095,6 +1095,11 @@ class Game {
     }
 
     handleMouseMove(data) {
+        // Throttle DOM updates to ~20fps to prevent layout thrashing
+        const now = Date.now();
+        if (this.lastTooltipUpdate && now - this.lastTooltipUpdate < 50) return;
+        this.lastTooltipUpdate = now;
+
         const tooltip = document.getElementById('game-tooltip');
         if (!tooltip) return;
 
