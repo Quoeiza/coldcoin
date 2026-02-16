@@ -1382,6 +1382,18 @@ export default class RenderSystem {
     }
 
     render(grid, entities, loot, projectiles, interaction, localPlayerId) {
+        // Safety check for uninitialized grid (Client waiting for INIT_WORLD)
+        if (!grid || !grid.length || !grid[0]) {
+            this.clear();
+            this.ctx.save();
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.font = '24px monospace';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText("Connecting to Host...", this.canvas.width / 2, this.canvas.height / 2);
+            this.ctx.restore();
+            return;
+        }
+
         // Check if we need to update static cache
         if (this.gridSystem && this.gridSystem.revision !== this.lastGridRevision) {
             this.updateStaticCache(grid);
