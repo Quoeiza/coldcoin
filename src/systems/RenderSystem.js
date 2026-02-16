@@ -54,6 +54,13 @@ export default class RenderSystem {
 
     setAssetLoader(loader) {
         this.assetLoader = loader;
+
+        // Load Actor Sprites
+        loader.loadImages({
+            'knight': './assets/images/actors/rogue.png',
+            'skelly': './assets/images/actors/skelly.png'
+        }).catch(err => console.error("Failed to load actor assets:", err));
+
         // After setting the loader, immediately start loading the tilemap assets
         this.tileMapManager.loadAssets(loader).catch(err => {
             console.error("Failed to load tilemap assets:", err);
@@ -270,7 +277,7 @@ export default class RenderSystem {
         }
     }
 
-    drawEntities(entities, localPlayerId) {
+    drawEntities(entities, localPlayerId, drawMode = 'ALL', ctx = this.ctx) {
         const now = Date.now();
         const localPlayer = entities.get(localPlayerId);
         
@@ -292,6 +299,9 @@ export default class RenderSystem {
         const renderList = [];
 
         entities.forEach((pos, id) => {
+            if (drawMode === 'REMOTE' && id === localPlayerId) return;
+            if (drawMode === 'LOCAL' && id !== localPlayerId) return;
+
             let visual = this.visualEntities.get(id);
             if (!visual) {
                 visual = { 
@@ -354,9 +364,9 @@ export default class RenderSystem {
             // Stealth Check
             if (pos.invisible) {
                 if (id !== localPlayerId) continue; // Completely invisible to others
-                this.ctx.globalAlpha = 0.5; // Ghostly for self
+                ctx.globalAlpha = 0.5; // Ghostly for self
             } else {
-                this.ctx.globalAlpha = 1.0;
+                ctx.globalAlpha = 1.0;
             }
 
             // Calculate Attack Shove Offset
@@ -398,45 +408,45 @@ export default class RenderSystem {
                 const tipR = this.tileSize * 0.02; // Nub radius
 
                 const definePath = () => {
-                    this.ctx.beginPath();
+                    ctx.beginPath();
                     // Left Nub (Bottom to Top)
-                    this.ctx.arc(cx - w, cy, tipR, Math.PI * 0.5, Math.PI * 1.5);
+                    ctx.arc(cx - w, cy, tipR, Math.PI * 0.5, Math.PI * 1.5);
                     // Top Curve
-                    this.ctx.quadraticCurveTo(cx, cy + h - th, cx + w, cy - tipR);
+                    ctx.quadraticCurveTo(cx, cy + h - th, cx + w, cy - tipR);
                     // Right Nub (Top to Bottom)
-                    this.ctx.arc(cx + w, cy, tipR, -Math.PI * 0.5, Math.PI * 0.5);
+                    ctx.arc(cx + w, cy, tipR, -Math.PI * 0.5, Math.PI * 0.5);
                     // Bottom Curve
-                    this.ctx.quadraticCurveTo(cx, cy + h, cx - w, cy + tipR);
-                    this.ctx.closePath();
+                    ctx.quadraticCurveTo(cx, cy + h, cx - w, cy + tipR);
+                    ctx.closePath();
                 };
 
                 // Background
                 definePath();
-                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-                this.ctx.fill();
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fill();
 
                 // Foreground
                 if (hpRatio > 0) {
-                    this.ctx.save();
+                    ctx.save();
                     definePath();
-                    this.ctx.clip();
-                    this.ctx.fillStyle = hpRatio > 0.5 ? '#4d4' : '#d44';
-                    this.ctx.fillRect(cx - w, cy, (2 * w) * hpRatio, h);
-                    this.ctx.restore();
+                    ctx.clip();
+                    ctx.fillStyle = hpRatio > 0.5 ? '#4d4' : '#d44';
+                    ctx.fillRect(cx - w, cy, (2 * w) * hpRatio, h);
+                    ctx.restore();
                 }
 
                 // Border
                 definePath();
-                this.ctx.lineWidth = 0.3;
-                this.ctx.strokeStyle = '#000';
-                this.ctx.stroke();
+                ctx.lineWidth = 0.3;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
             }
 
             // Shadow
-            this.ctx.fillStyle = 'rgba(20, 19, 31, 0.6)';
-            this.ctx.beginPath();
-            this.ctx.ellipse(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.875), this.tileSize * 0.3125, this.tileSize * 0.125, 0, 0, Math.PI * 2);
-            this.ctx.fill();
+            ctx.fillStyle = 'rgba(20, 19, 31, 0.6)';
+            ctx.beginPath();
+            ctx.ellipse(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.875), this.tileSize * 0.3125, this.tileSize * 0.125, 0, 0, Math.PI * 2);
+            ctx.fill();
 
             // Determine Sprite
             let spriteKey = null;
@@ -447,7 +457,7 @@ export default class RenderSystem {
 
             if (img) {
                 // --- Sprite Rendering ---
-                this.ctx.save();
+                ctx.save();
 
                 // Update Facing Memory (Retain last horizontal direction)
                 if (pos.facing && pos.facing.x !== 0) {
@@ -458,11 +468,11 @@ export default class RenderSystem {
                 const centerX = screenX + (this.tileSize * 0.5);
                 const centerY = screenY + (this.tileSize * 0.5);
 
-                this.ctx.translate(centerX, centerY);
+                ctx.translate(centerX, centerY);
 
                 // Sprite defaults to Left. Flip if facing Right.
                 if (facingX > 0) {
-                    this.ctx.scale(-1, 1);
+                    ctx.scale(-1, 1);
                 }
 
                 // Draw Sprite Anchored to Bottom-Center of Tile
@@ -472,8 +482,8 @@ export default class RenderSystem {
                 
                 // Calculate Y offset: Bottom of sprite aligns with bottom of tile (+tileSize/2 relative to center)
                 const drawY = (this.tileSize / 2) - spriteH;
-                this.ctx.drawImage(img, Math.floor(-spriteW / 2), Math.floor(drawY), spriteW, spriteH);
-                this.ctx.restore();
+                ctx.drawImage(img, Math.floor(-spriteW / 2), Math.floor(drawY), spriteW, spriteH);
+                ctx.restore();
             } else {
                 // --- Fallback Procedural Rendering ---
 
@@ -482,7 +492,7 @@ export default class RenderSystem {
                 const isFlashing = (now - visual.flashStart < 100); // 100ms flash
 
                 if (isFlashing) {
-                    this.ctx.fillStyle = '#FFFFFF';
+                    ctx.fillStyle = '#FFFFFF';
                 } else {
                     let baseColor = isMe ? '#4a6' : '#a44';
                     
@@ -498,32 +508,32 @@ export default class RenderSystem {
                     }
                     
                     // Gradient Body
-                    const grad = this.ctx.createRadialGradient(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.06, screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.375);
+                    const grad = ctx.createRadialGradient(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.06, screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.375);
                     grad.addColorStop(0, isMe && pos.team !== 'monster' ? '#6c8' : '#c66');
                     grad.addColorStop(1, baseColor);
                     
                     // Simple shape differentiation
                     if (pos.type === 'slime') {
                         // Slimes are slightly translucent
-                        this.ctx.globalAlpha = 0.9;
+                        ctx.globalAlpha = 0.9;
                     }
-                    this.ctx.fillStyle = grad;
+                    ctx.fillStyle = grad;
                 }
 
-                this.ctx.beginPath();
-                this.ctx.arc(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.3125, 0, Math.PI * 2);
-                this.ctx.fill();
+                ctx.beginPath();
+                ctx.arc(screenX + (this.tileSize * 0.5), screenY + (this.tileSize * 0.5), this.tileSize * 0.3125, 0, Math.PI * 2);
+                ctx.fill();
 
                 // Draw facing indicator
                 if (pos.facing) {
                     const indicatorX = screenX + (this.tileSize * 0.5) + (pos.facing.x * (this.tileSize * 0.375));
                     const indicatorY = screenY + (this.tileSize * 0.5) + (pos.facing.y * (this.tileSize * 0.375));
-                    this.ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                    this.ctx.fillRect(indicatorX - (this.tileSize * 0.06), indicatorY - (this.tileSize * 0.06), this.tileSize * 0.125, this.tileSize * 0.125);
+                    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                    ctx.fillRect(indicatorX - (this.tileSize * 0.06), indicatorY - (this.tileSize * 0.06), this.tileSize * 0.125, this.tileSize * 0.125);
                 }
             }
             
-            this.ctx.globalAlpha = 1.0; // Reset
+            ctx.globalAlpha = 1.0; // Reset
         }
     }
 
@@ -1125,17 +1135,38 @@ export default class RenderSystem {
         this.drawWalls(grid, grid[0].length, grid.length);
         this.drawLoot(loot);
         
-        // 1. Draw Cast Shadows (Under Entities)
+        // 1. Update Shadow Buffer (Offscreen)
         this.drawShadowLayer(grid, this.visualEntities.get(localPlayerId));
 
+        // 2. Draw Entities & Projectiles (Before Roofs/Ambient)
         this.drawProjectiles(projectiles);
-        this.drawEntities(entities, localPlayerId);
+        this.drawEntities(entities, localPlayerId, 'REMOTE');
         this.drawEffects();
+        
+        // 3. Draw Roofs (Occludes entities)
         this.drawRoof(grid, grid[0].length, grid.length);
-        
-        // 2. Draw Ambient Darkness (Over Everything)
+
+        // 4. Draw Ambient Darkness (Over Everything)
         this.drawAmbientLayer(this.visualEntities.get(localPlayerId));
+
+        // 5. Draw Local Player (Bright, Occluded by Roofs)
+        // Reuse shadowCanvas as buffer to mask player against roofs
+        const sCtx = this.shadowCtx;
+        sCtx.save();
+        sCtx.clearRect(0, 0, this.shadowCanvas.width, this.shadowCanvas.height);
         
+        this.drawEntities(entities, localPlayerId, 'LOCAL', sCtx);
+        
+        sCtx.globalCompositeOperation = 'destination-out';
+        const camX = Math.floor(this.camera.x);
+        const camY = Math.floor(this.camera.y);
+        sCtx.translate(-camX, -camY);
+        sCtx.drawImage(this.staticCacheTop, 0, 0);
+        sCtx.translate(camX, camY);
+        sCtx.restore();
+
+        this.ctx.drawImage(this.shadowCanvas, 0, 0);
+
         this.ctx.restore(); // Restore shake
 
         // Draw UI-like world elements (Floating Text, Interaction) on top, unaffected by shake
