@@ -385,7 +385,7 @@ export default class RenderSystem {
                     attackStart: 0, flashStart: 0,
                     bumpStart: 0, bumpDir: null,
                     lastFacingX: -1, // Default Left
-                    opacity: 0, // Start invisible and fade in
+                    opacity: (id === localPlayerId) ? 1 : 0, // Start visible for self, fade in for others
                     idlePhase: Math.random() * Math.PI * 2,
                     recoilX: 0, recoilY: 0, recoilStart: 0,
                     isDying: false, deathStart: 0,

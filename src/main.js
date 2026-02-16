@@ -360,8 +360,7 @@ class Game {
             }
         }
         this.renderInventory();
-        this.audioSystem.play('pickup'); // Reuse sound for now
-    }
+        this.audioSystem.play('pickup'
 
     handleEquipItem(itemId, slot) {
         const success = this.lootSystem.equipItem(this.state.myId, itemId, slot);
@@ -607,8 +606,7 @@ class Game {
 
             // Play sound for specific player
             if (entityId === this.state.myId) {
-                this.audioSystem.play('pickup');
-                this.renderInventory();
+                this.audioSystem.play('pickup',
                 this.updateQuickSlotUI();
                 const goldText = result.gold > 0 ? ` + ${result.gold}g` : '';
                 const itemName = this.getItemName(result.itemId);
@@ -657,10 +655,9 @@ class Game {
                 const hpEl = document.getElementById('hp-val');
                 if (hpEl) hpEl.innerText = Math.max(0, currentHp);
                 this.renderSystem.triggerShake(5, 200); // Screen shake on damage
-                this.audioSystem.play('hit'); 
+                this.audioSystem.play('hit', this.gridSystem.entities.get(targetId).x, this.gridSystem.entities.get(targetId).y);
             }
-
-            // Log significant damage events for local player
+s for local player
             if (amount > 0 && (targetId === this.state.myId || sourceId === this.state.myId)) {
                 const tStats = this.combatSystem.getStats(targetId);
                 const sStats = sourceId ? this.combatSystem.getStats(sourceId) : null;
@@ -708,11 +705,10 @@ class Game {
 
             this.gridSystem.removeEntity(entityId);
             this.renderSystem.triggerDeath(entityId);
-            this.audioSystem.play('death');
+            this.audioSystem.play('death', deathX, deathY);
             
             if (this.state.isHost) {
-                // Award Gold for Monster Kill
-                const victimName = stats.name || entityId;
+                // Award Gold for Monstername || entityId;
                 const killerStats = killerId ? this.combatSystem.getStats(killerId) : null;
                 const killerName = killerStats ? (killerStats.name || killerStats.type) : (killerId || 'Environment');
 
@@ -822,11 +818,10 @@ class Game {
                 } else if (data.type === 'PORTAL_SPAWN') {
                     this.gridSystem.setTile(data.payload.x, data.payload.y, 9);
                     this.showNotification("The Extraction Portal has opened!");
-                    this.audioSystem.play('pickup');
+                    this.audioSystem.play('pickup', data.payload.x, data.payload.y);
                 } else if (data.type === 'RESPAWN_MONSTER') {
                     if (data.payload.id === this.state.myId) {
-                        this.showNotification(`Respawned as ${data.payload.type}! Hunt them down.`);
-                        this.state.isExtracting = false;
+                        this.showNotification(`Respawned as ${data.payload.tyfalse;
                     }
                 } else if (data.type === 'EFFECT') {
                     this.renderSystem.addEffect(data.payload.x, data.payload.y, data.payload.type);
@@ -841,12 +836,11 @@ class Game {
                     // Visuals are handled via Snapshot Sync.
                     // this.state.projectiles.push(data.payload); 
                     // ^ Removed to prevent duplication with SyncManager
-                    this.audioSystem.play('attack');
+                    this.audioSystem.play('attack', data.payload.x, data.payload.y);
                 }
 
                 if (data.type === 'UPDATE_GOLD') {
-                    if (data.payload.id === this.state.myId) {
-                        this.playerData.gold += data.payload.amount;
+                    if (data.payload.id === this.state.myId) {.payload.amount;
                         this.updateGoldUI();
                         this.database.savePlayer({ gold: this.playerData.gold });
                         this.showNotification(`+${data.payload.amount}g`);
@@ -859,14 +853,13 @@ class Game {
                 
                 if (data.type === 'LOOT_SUCCESS') {
                     if (data.payload.id === this.state.myId) {
-                        this.audioSystem.play('pickup');
+                        this.audioSystem.play('pickup', 0, 0); // Local
                         this.renderInventory();
                         this.updateQuickSlotUI();
                         // We don't have the item ID here easily without sending it in payload
                         // For now, just generic sound/update is okay, or we can update protocol later.
                         // The prompt asked for notification on looting from chest, which usually happens locally or via direct interaction response.
                     }
-                }
             }
         });
 
@@ -1287,29 +1280,27 @@ class Game {
                     };
                     this.state.projectiles.push(proj);
                     this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
-                    this.audioSystem.play('attack');
+                    this.audioSystem.play('attack', pos.x, pos.y);
                 } else {
                     // Melee
                     const tx = pos.x + intent.direction.x;
                     const ty = pos.y + intent.direction.y;
                     const targetId = this.gridSystem.getEntityAt(tx, ty);
                     
-                    if (targetId) {
-                        this.performAttack(entityId, targetId);
+                    if (targetId) {d, targetId);
                     } else {
                         // Whiff
                         this.renderSystem.triggerAttack(entityId);
                         this.renderSystem.addEffect(tx, ty, 'slash');
                         this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
-                        this.audioSystem.play('swing');
+                        this.audioSystem.play('swing', pos.x, pos.y);
                     }
                 }
             }
             return; // Suppress position update
         }
 
-        if (pos && intent.type === 'MOVE') {
-            const cost = this.gridSystem.getMovementCost(pos.x + intent.direction.x, pos.y + intent.direction.y);
+        if (pos && intent.type === 'MOVE') {ost(pos.x + intent.direction.x, pos.y + intent.direction.y);
             cooldown *= cost;
         }
 
@@ -1370,7 +1361,7 @@ class Game {
 
             if (result.success) {
                 if (entityId === this.state.myId) {
-                    this.audioSystem.play('step');
+                    this.audioSystem.play('step', pos.x, pos.y);
                     this.renderSystem.addEffect(startX, startY, 'dust'); // Dust particle
                 }
                 
@@ -1378,8 +1369,7 @@ class Game {
                 // Round coordinates to ensure valid grid access (prevent float indexing)
                 if (pos && this.gridSystem.grid[Math.round(pos.y)][Math.round(pos.x)] === 9) {
                     this.handleExtraction(entityId);
-                }
-            } else if (result.collision && result.collision !== 'wall') {
+                }collision !== 'wall') {
                 // Trigger Bump for entity collision too
                 this.renderSystem.triggerBump(entityId, intent.direction);
 
@@ -1400,7 +1390,7 @@ class Game {
                 // Trigger Bump for wall
                 this.renderSystem.triggerBump(entityId, intent.direction);
                 if (entityId === this.state.myId) {
-                    this.audioSystem.play('bump');
+                    this.audioSystem.play('bump', pos.x, pos.y);
                 }
             }
         }
@@ -1410,7 +1400,6 @@ class Game {
             if (pos) {
                 const tx = pos.x + pos.facing.x;
                 const ty = pos.y + pos.facing.y;
-                
                 // 1. Check for Entity (Monster/Player) -> Attack
                 const targetId = this.gridSystem.getEntityAt(tx, ty);
                 if (targetId) {
@@ -1430,7 +1419,7 @@ class Game {
                 this.renderSystem.triggerAttack(entityId);
                 this.renderSystem.addEffect(tx, ty, 'slash');
                 this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
-                this.audioSystem.play('swing');
+                this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
 
@@ -1442,7 +1431,6 @@ class Game {
                 return;
             }
 
-            if (pos) {
                 // Check for Interaction Targets (Chest/Extraction)
                 const itemsBelow = this.lootSystem.getItemsAt(pos.x, pos.y);
                 const fx = pos.x + pos.facing.x;
@@ -1519,7 +1507,7 @@ class Game {
                 };
                 this.state.projectiles.push(proj);
                 this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
-                this.audioSystem.play('attack');
+                this.audioSystem.play('attack', pos.x, pos.y);
                 this.renderSystem.triggerAttack(entityId);
             } else {
                 // Melee: Attack adjacent tile in facing direction
@@ -1531,10 +1519,9 @@ class Game {
                     this.performAttack(entityId, adjId);
                 } else {
                     // Whiff
-                    this.renderSystem.triggerAttack(entityId);
-                    this.renderSystem.addEffect(adjX, adjY, 'slash');
+                    this.renderSystem.triggerAt(adjX, adjY, 'slash');
                     this.peerClient.send({ type: 'EFFECT', payload: { x: adjX, y: adjY, type: 'slash' } });
-                    this.audioSystem.play('swing');
+                    this.audioSystem.play('swing', pos.x, pos.y);
                 }
             }
         }
@@ -1547,7 +1534,6 @@ class Game {
                 const targetY = attacker.y + attacker.facing.y;
                 const targetId = this.gridSystem.getEntityAt(targetX, targetY);
 
-                if (targetId) {
                     // Friendly Fire Check for Monsters
                     const attackerStats = this.combatSystem.getStats(entityId);
                     const targetStats = this.combatSystem.getStats(targetId);
@@ -1559,7 +1545,7 @@ class Game {
                     // Whiff (Attack air)
                     this.renderSystem.addEffect(targetX, targetY, 'slash');
                     this.peerClient.send({ type: 'EFFECT', payload: { x: targetX, y: targetY, type: 'slash' } });
-                    this.audioSystem.play('swing');
+                    this.audioSystem.play('swing', attacker.x, attacker.y);
                 }
             }
         }
@@ -1572,12 +1558,11 @@ class Game {
                 this.addActivityLog(`Used ${effect.name} (Slot ${intent.slot + 1})`);
                 if (effect.effect === 'heal') {
                     const stats = this.combatSystem.getStats(entityId);
-                    if (stats) {
-                        stats.hp = Math.min(stats.maxHp, stats.hp + effect.value);
+                    if (stats) {.maxHp, stats.hp + effect.value);
                         // Emit damage event with negative amount to signal heal? Or just update HP.
                         // Emit negative amount to trigger green floating text
                         this.combatSystem.emit('damage', { targetId: entityId, amount: -effect.value, sourceId: entityId, currentHp: stats.hp });
-                        this.audioSystem.play('pickup'); // Use pickup sound for now
+                        this.audioSystem.play('pickup', this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y);
                         this.renderInventory();
                         this.updateQuickSlotUI();
                     }
@@ -1592,8 +1577,7 @@ class Game {
         // Legacy F key or mapped ability
         if (intent.type === 'ABILITY') {
             const result = this.combatSystem.useAbility(entityId);
-            if (result) {
-                this.showNotification(`${result.ability}`);
+            if (result) {y}`);
                 this.addActivityLog(`Used ${result.ability}`);
                 // Sync visual effects if needed
                 if (result.effect === 'stealth') {
@@ -1653,7 +1637,7 @@ class Game {
                 
                 this.state.projectiles.push(proj);
                 this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
-                this.audioSystem.play('attack');
+                this.audioSystem.play('attack', attackerPos.x, attackerPos.y);
                 return;
             }
         }
@@ -1666,11 +1650,10 @@ class Game {
         this.peerClient.send({ type: 'EFFECT', payload: { x: targetPos.x, y: targetPos.y, type: 'slash' } });
         
         // Audio
-        this.audioSystem.play('attack');
+        this.audioSystem.play('attack', attackerId === this.state.myId ? this.gridSystem.entities.get(attackerId).x : targetPos.x, targetPos.y);
 
         const stats = this.combatSystem.getStats(attackerId);
         let damage = stats ? stats.damage : 5;
-        
         // Crit Logic (15% Chance)
         const isCrit = Math.random() < 0.15;
         if (isCrit) damage = Math.floor(damage * 1.5);
@@ -1682,8 +1665,7 @@ class Game {
         console.log(`Processing extraction for ${entityId}`);
         // 1. Save Data
         const stats = this.combatSystem.getStats(entityId);
-        const name = stats ? (stats.name || entityId) : entityId;
-
+        cons
         if (entityId === this.state.myId) {
             this.playerData.gold += 100; // Flat reward for now
             this.state.isExtracting = true;
@@ -2167,6 +2149,12 @@ class Game {
     render(alpha) {
         if (!this.state.myId) return;
         
+        // Update Audio Listener
+        const myPos = this.gridSystem.entities.get(this.state.myId);
+        if (myPos) {
+            this.audioSystem.updateListener(myPos.x, myPos.y);
+        }
+
         this.renderSystem.render(
             this.gridSystem.grid,
             this.gridSystem.entities,

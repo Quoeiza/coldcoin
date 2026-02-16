@@ -12,6 +12,7 @@ export default class AudioSystem {
 
             this.buffers = {};
             this.assetLoader = null;
+            this.listenerPos = null;
 
             // Generate high-fidelity procedural assets immediately
             this.generateGrimdarkAssets();
@@ -148,7 +149,11 @@ export default class AudioSystem {
         return await offlineCtx.startRendering();
     }
 
-    play(effect) {
+    updateListener(x, y) {
+        this.listenerPos = { x, y };
+    }
+
+    play(effect, x, y) {
         if (!this.enabled) return;
         if (this.enabled && this.ctx.state === 'suspended') {
             this.ctx.resume();
@@ -180,17 +185,43 @@ export default class AudioSystem {
         const source = this.ctx.createBufferSource();
         source.buffer = buffer;
 
+        const gainNode = this.ctx.createGain();
+        
+        // Spatial Audio Logic
+        if (x !== undefined && y !== undefined && this.listenerPos) {
+            const dx = x - this.listenerPos.x;
+            const dy = y - this.listenerPos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const maxDist = 24;
+
+            if (dist > maxDist) return; // Too far to hear
+
+            // Distance Attenuation (Linear)
+            const vol = Math.max(0, 1 - (dist / maxDist));
+            volumeScale *= vol;
+
+            // Stereo Panning
+            const panner = this.ctx.createStereoPanner();
+            // Map X distance to -1 (left) to 1 (right)
+            // We use a narrower field for panning than audibility to keep it distinct
+            const pan = Math.max(-1, Math.min(1, dx / (maxDist / 2)));
+            panner.pan.value = pan;
+            
+            source.connect(panner);
+            panner.connect(gainNode);
+        } else {
+            source.connect(gainNode);
+        }
+
         // Pitch Randomization (±200 cents / ±2 semitones)
         // This prevents the "machine gun" effect on repeated sounds
         const detune = (Math.random() * 400) - 200; 
         source.detune.value = detune;
 
         // Volume Randomization (0.8x to 1.2x)
-        const gainNode = this.ctx.createGain();
         const volVariance = 0.8 + (Math.random() * 0.4);
         gainNode.gain.value = volVariance * volumeScale;
 
-        source.connect(gainNode);
         gainNode.connect(this.masterGain);
         
         source.start();
