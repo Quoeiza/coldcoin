@@ -24,6 +24,7 @@ class Game {
             projectiles: [],
             interaction: null, // { type, targetId, startTime, duration, x, y }
             lavaTimer: 0,
+            netTimer: 0,
             handshakeInterval: null,
             isExtracting: false,
             autoPath: [], // For Auto-Explore
@@ -1970,6 +1971,17 @@ class Game {
             if (this.state.gameTime <= 0) {
                 this.peerClient.send({ type: 'GAME_OVER', payload: { message: "Time Expired - Dungeon Collapsed" } });
                 this.showGameOver("Time Expired");
+            }
+
+            // Network Tick: Send Snapshot (10Hz)
+            this.state.netTimer += dt;
+            if (this.state.netTimer >= 100) {
+                this.state.netTimer = 0;
+                const snapshot = this.syncManager.serializeState(
+                    this.gridSystem, this.combatSystem, this.lootSystem,
+                    this.state.projectiles, this.state.gameTime
+                );
+                this.peerClient.send({ type: 'SNAPSHOT', payload: snapshot });
             }
         }
 
