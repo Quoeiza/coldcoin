@@ -13,7 +13,7 @@ export default class RenderSystem {
         this.ctx.imageSmoothingEnabled = false;
         this.tileSize = tileSize || 48; // Match tile manager config
         this.scale = 2;
-        this.lightRadius = 200;
+        this.lightRadius = 300;
 
         // Lighting Layer
         this.lightCanvas = document.createElement('canvas');
@@ -230,6 +230,7 @@ export default class RenderSystem {
 
     drawEntities(entities, localPlayerId) {
         const now = Date.now();
+        const localPlayer = entities.get(localPlayerId);
         
         // Prune visuals that no longer exist
         for (const id of this.visualEntities.keys()) {
@@ -271,7 +272,13 @@ export default class RenderSystem {
             visual.x = visual.startX + (visual.targetX - visual.startX) * t;
             visual.y = visual.startY + (visual.targetY - visual.startY) * t;
 
-            renderList.push({ id, pos, visual });
+            // Line of Sight Check
+            let isVisible = true;
+            if (localPlayer && id !== localPlayerId && this.gridSystem) {
+                isVisible = this.gridSystem.hasLineOfSight(localPlayer.x, localPlayer.y, pos.x, pos.y);
+            }
+
+            if (isVisible) renderList.push({ id, pos, visual });
         });
 
         // 3. Depth Sort (Y-sort)
