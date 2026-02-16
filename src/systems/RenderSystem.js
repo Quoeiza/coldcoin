@@ -48,6 +48,8 @@ export default class RenderSystem {
         this.lastGridRevision = -1;
         this.shadowCasters = []; // Reuse array to reduce GC
         this.shadowMaskers = []; // Reuse array to reduce GC
+        this.shadowPoints = []; // Reuse array for hull calculation
+        this.hullBuffer = [];   // Reuse array for hull results
     }
 
     setAssetLoader(loader) {
@@ -272,6 +274,13 @@ export default class RenderSystem {
         const now = Date.now();
         const localPlayer = entities.get(localPlayerId);
         
+        // Calculate View Bounds for Culling
+        const camX = this.camera.x;
+        const camY = this.camera.y;
+        const viewW = this.canvas.width / this.scale;
+        const viewH = this.canvas.height / this.scale;
+        const margin = this.tileSize * 2; // Allow some overhang for sprites/shadows
+
         // Prune visuals that no longer exist
         for (const id of this.visualEntities.keys()) {
             if (!entities.has(id)) {
@@ -311,6 +320,15 @@ export default class RenderSystem {
             const t = Math.min(1, (now - visual.moveStartTime) / moveDuration);
             visual.x = visual.startX + (visual.targetX - visual.startX) * t;
             visual.y = visual.startY + (visual.targetY - visual.startY) * t;
+
+            // Optimization: View Frustum Culling
+            // If entity is completely off-screen, skip LOS check and rendering
+            const screenX = (visual.x * this.tileSize) - camX;
+            const screenY = (visual.y * this.tileSize) - camY;
+            
+            if (screenX < -margin || screenX > viewW + margin || screenY < -margin || screenY > viewH + margin) {
+                return; // Skip this entity
+            }
 
             // Line of Sight Check
             let isVisible = true;
@@ -993,7 +1011,10 @@ export default class RenderSystem {
             { x: tx + pad, y: ty + th - pad }
         ];
 
-        const points = [];
+        // Optimization: Reuse array to prevent GC thrashing
+        this.shadowPoints.length = 0;
+        const points = this.shadowPoints;
+
         // Use a large distance to ensure shadows extend off-screen
         const projectDist = Math.max(this.canvas.width, this.canvas.height) * 2;
 
@@ -1001,8 +1022,10 @@ export default class RenderSystem {
             points.push(c);
             const dx = c.x - lsx;
             const dy = c.y - lsy;
-            const len = Math.sqrt(dx*dx + dy*dy);
-            if (len > 0.001) {
+            // Fast approximate length check to avoid sqrt if possible? No, need normalization.
+            // But we can check if dx/dy are tiny.
+            if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+                const len = Math.sqrt(dx*dx + dy*dy);
                 points.push({
                     x: c.x + (dx / len) * projectDist,
                     y: c.y + (dy / len) * projectDist
@@ -1010,8 +1033,6 @@ export default class RenderSystem {
             }
         });
 
-        // Use Robust Convex Hull (Monotone Chain) instead of Centroid Sort
-        // Centroid sort fails when light is very close to the object (concave wrapping).
         const hull = this.computeConvexHull(points);
 
         ctx.beginPath();
@@ -1027,15 +1048,19 @@ export default class RenderSystem {
 
     computeConvexHull(points) {
         // Monotone Chain Algorithm
+        if (points.length <= 2) return points;
+        
         points.sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
         const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 
-        const lower = [];
+        // Reuse buffer for hull construction? 
+        // It's tricky because we need two stacks. Let's just optimize the array creation slightly.
+        const lower = []; 
         for (let p of points) {
             while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
             lower.push(p);
         }
-        const upper = [];
+        const upper = []; 
         for (let i = points.length - 1; i >= 0; i--) {
             const p = points[i];
             while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();

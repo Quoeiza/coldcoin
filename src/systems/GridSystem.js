@@ -255,6 +255,10 @@ export default class GridSystem {
         x1 = Math.floor(x1); y1 = Math.floor(y1);
         if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) return false;
 
+        // Optimization: Quick distance check (approx 30 tiles radius)
+        // 30^2 = 900. Prevents raycasting across the entire map for far-off entities.
+        if ((x1 - x0) ** 2 + (y1 - y0) ** 2 > 900) return false;
+
         let dx = Math.abs(x1 - x0);
         let dy = Math.abs(y1 - y0);
         let sx = (x0 < x1) ? 1 : -1;
@@ -527,9 +531,19 @@ export default class GridSystem {
         const endKey = this.getKey(endX, endY);
 
         while (openList.length > 0) {
-            // Sort by F cost
-            openList.sort((a, b) => a.f - b.f);
-            const current = openList.shift();
+            // Optimization: Linear search for lowest F is O(N) vs Sort O(N log N)
+            // For small open lists in grid pathfinding, this is significantly faster than sorting + shifting.
+            let lowestIndex = 0;
+            for (let i = 1; i < openList.length; i++) {
+                if (openList[i].f < openList[lowestIndex].f) {
+                    lowestIndex = i;
+                }
+            }
+            const current = openList[lowestIndex];
+            // Fast remove: swap with end and pop
+            openList[lowestIndex] = openList[openList.length - 1];
+            openList.pop();
+
             const currentKey = this.getKey(current.x, current.y);
 
             if (currentKey === endKey) {

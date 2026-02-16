@@ -1770,6 +1770,14 @@ class Game {
             const pos = this.gridSystem.entities.get(id);
             if (!pos) continue;
 
+            // Optimization: AI Sleep
+            // If the monster is too far from any player, skip logic.
+            // This drastically reduces CPU usage on large maps with many monsters.
+            const nearestPlayer = this.findNearestPlayer(pos.x, pos.y);
+            if (!nearestPlayer) continue;
+            const distToPlayer = Math.abs(nearestPlayer.x - pos.x) + Math.abs(nearestPlayer.y - pos.y);
+            if (distToPlayer > 25) continue; // Sleep radius (approx 1.5 screens)
+
             // Check collision with chests for AI
             // Simple check: if target is blocked by chest, don't move there
             // This is handled implicitly if moveEntity checks collision, but moveEntity only checks walls/entities.
@@ -1780,17 +1788,15 @@ class Game {
             let targetPos = null;
             let shouldAttack = false;
 
-            const target = this.findNearestPlayer(pos.x, pos.y);
-            
-            if (target) {
+            if (nearestPlayer) {
                 // Check Line of Sight
-                const hasLOS = this.gridSystem.hasLineOfSight(pos.x, pos.y, target.x, target.y);
+                const hasLOS = this.gridSystem.hasLineOfSight(pos.x, pos.y, nearestPlayer.x, nearestPlayer.y);
                 
                 if (hasLOS) {
                     stats.aiState = 'CHASING';
-                    stats.targetLastPos = { x: target.x, y: target.y };
+                    stats.targetLastPos = { x: nearestPlayer.x, y: nearestPlayer.y };
                     stats.memoryTimer = 5000; // 5 Seconds Memory
-                    targetPos = target;
+                    targetPos = nearestPlayer;
                     shouldAttack = true;
                 }
             } else if (stats.aiState === 'IDLE') {
@@ -1825,7 +1831,7 @@ class Game {
                     // Update facing to look at target
                     pos.facing = { x: Math.sign(dx), y: Math.sign(dy) };
                     // Attack (Only if we have actual target/LOS)
-                    this.performAttack(id, target.id);
+                    this.performAttack(id, nearestPlayer.id);
                     stats.lastActionTime = now;
                 } else {
                     // Move towards player (Simple Axis-Aligned)
