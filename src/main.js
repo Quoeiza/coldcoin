@@ -38,6 +38,7 @@ class Game {
 
     async init() {
         // 1. Load Configuration
+        this.injectCSS();
         const configs = await this.assetLoader.loadAll();
         this.config = configs;
 
@@ -93,6 +94,40 @@ class Game {
         }
     }
 
+    injectCSS() {
+        const style = document.createElement('style');
+        style.innerHTML = `
+            @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@400;700&display=swap');
+            :root { --steel-dark: #1a1a1a; --steel-mid: #333333; --steel-light: #555555; --rust: #8b4513; --rust-light: #cd853f; --parchment: #e6d2b5; --parchment-dark: #c2a886; --text-dark: #2b1d0e; --text-light: #e0e0e0; --gold: #ffd700; }
+            body { font-family: 'Lato', sans-serif; color: var(--text-light); margin: 0; overflow: hidden; background: #050505; }
+            h1, h2, h3, button, .header-font { font-family: 'Cinzel', serif; }
+            #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+            #ui-layer > * { pointer-events: auto; }
+            button { background: linear-gradient(180deg, var(--steel-light), var(--steel-mid)); border: 2px solid var(--steel-dark); border-bottom: 4px solid var(--steel-dark); color: var(--parchment); padding: 10px 20px; font-size: 16px; font-weight: bold; text-transform: uppercase; cursor: pointer; border-radius: 4px; transition: transform 0.1s, filter 0.1s; box-shadow: 0 4px 6px rgba(0,0,0,0.5); text-shadow: 1px 1px 0 #000; }
+            button:hover { filter: brightness(1.2); }
+            button:active { transform: translateY(2px); border-bottom-width: 2px; }
+            input, select { background: rgba(0, 0, 0, 0.6); border: 1px solid var(--steel-light); color: var(--parchment); padding: 10px; font-family: 'Lato', sans-serif; border-radius: 2px; }
+            #lobby-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; background-color: #111; z-index: 100; }
+            #lobby-screen h1 { font-size: 4rem; color: var(--rust-light); text-shadow: 0 0 10px var(--rust), 2px 2px 0 #000; margin-bottom: 20px; }
+            #player-stats { font-size: 1.2rem; color: var(--gold); margin-bottom: 20px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 4px; border: 1px solid var(--rust); }
+            #btn-inventory-toggle { position: absolute; bottom: 25px; right: 25px; width: 72px; height: 72px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, var(--rust-light), var(--rust)); border: 3px solid #3e2723; box-shadow: 0 5px 15px rgba(0,0,0,0.6), inset 0 0 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 0; }
+            #btn-inventory-toggle svg { width: 40px; height: 40px; color: #f4e4bc; filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.8)); }
+            #btn-inventory-toggle:hover { transform: scale(1.1) rotate(-5deg); }
+            #inventory-modal, #ground-loot-modal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--parchment); border: 6px solid var(--steel-mid); border-radius: 8px; padding: 20px; color: var(--text-dark); box-shadow: 0 0 0 2px var(--rust), 0 20px 50px rgba(0,0,0,0.9); min-width: 300px; max-width: 90%; }
+            #inventory-grid, #ground-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 15px 0; background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.2); }
+            .inv-slot, .equip-slot { width: 48px; height: 48px; background: rgba(0,0,0,0.15); border: 1px solid rgba(0,0,0,0.3); border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.1s; }
+            .inv-slot:hover, .equip-slot:hover { background: rgba(0,0,0,0.25); border-color: var(--rust); }
+            #game-timer { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 24px; font-family: 'Cinzel', serif; font-weight: bold; text-shadow: 2px 2px 0 #000; background: rgba(0,0,0,0.6); padding: 5px 15px; border: 1px solid var(--steel-light); border-radius: 4px; }
+            #room-code-display { position: absolute; top: 20px; right: 20px; font-family: 'Cinzel', serif; color: var(--text-light); background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 4px; }
+            #stats-bar { position: absolute; top: 20px; left: 20px; display: flex; flex-direction: column; gap: 5px; font-family: 'Cinzel', serif; text-shadow: 1px 1px 0 #000; }
+            #quick-slots-hud { position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; }
+            .quick-slot-hud-item { width: 56px; height: 56px; background: rgba(0,0,0,0.7); border: 2px solid var(--steel-light); border-radius: 4px; position: relative; display: flex; align-items: center; justify-content: center; }
+            .key-label { position: absolute; top: -8px; left: -8px; background: var(--rust); color: white; font-size: 10px; padding: 2px 5px; border-radius: 3px; border: 1px solid #000; }
+            .hidden { display: none !important; }
+        `;
+        document.head.appendChild(style);
+    }
+
     respawnAsMonster(entityId) {
         const types = Object.keys(this.config.enemies);
         const type = types[Math.floor(Math.random() * types.length)];
@@ -121,7 +156,7 @@ class Game {
             <h1>Cold Coin</h1>
             <div id="player-stats">Gold: ${this.playerData.gold} | Extractions: ${this.playerData.extractions || 0}</div>
             <input type="text" id="player-name" placeholder="Enter Name" value="${this.playerData.name}" />
-            <select id="class-select" style="padding: 10px; background: #333; color: white; border: 1px solid #555;">
+            <select id="class-select">
                 <option value="Fighter">Fighter (Heal)</option>
                 <option value="Rogue">Rogue (Stealth)</option>
                 <option value="Barbarian">Barbarian (Rage)</option>
@@ -206,9 +241,17 @@ class Game {
             uiLayer.appendChild(timer);
         }
 
+        // Ensure Inventory Button exists and has the right icon
+        let btnToggle = document.getElementById('btn-inventory-toggle');
+        if (!btnToggle) {
+            btnToggle = document.createElement('button');
+            btnToggle.id = 'btn-inventory-toggle';
+            uiLayer.appendChild(btnToggle);
+        }
+        btnToggle.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>`;
+
         // Inventory Toggles
         const modal = document.getElementById('inventory-modal');
-        const btnToggle = document.getElementById('btn-inventory-toggle');
         const btnClose = document.getElementById('btn-inventory-close');
 
         const toggleInv = () => {
