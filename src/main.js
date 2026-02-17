@@ -10,6 +10,8 @@ import SyncManager from './network/SyncManager.js';
 import AudioSystem from './systems/AudioSystem.js';
 import Database from './services/Database.js';
 
+const AI_DIRS = [{x:0, y:1}, {x:0, y:-1}, {x:1, y:0}, {x:-1, y:0}];
+
 class Game {
     constructor() {
         this.assetLoader = new AssetLoader();
@@ -1768,8 +1770,10 @@ class Game {
             // Optimization: AI Sleep
             // If the monster is too far from any player, skip logic.
             // This drastically reduces CPU usage on large maps with many monsters.
-            const nearestPlayer = this.findNearestPlayer(pos.x, pos.y);
-            if (!nearestPlayer) continue;
+            const nearestPlayerId = this.findNearestPlayerId(pos.x, pos.y);
+            if (!nearestPlayerId) continue;
+            
+            const nearestPlayer = this.gridSystem.entities.get(nearestPlayerId);
             const distToPlayer = Math.abs(nearestPlayer.x - pos.x) + Math.abs(nearestPlayer.y - pos.y);
             if (distToPlayer > 25) continue; // Sleep radius (approx 1.5 screens)
 
@@ -1797,8 +1801,7 @@ class Game {
             } else if (stats.aiState === 'IDLE') {
                 // Roaming Logic
                 if (Math.random() < 0.02) { // 2% chance per tick to move
-                    const dirs = [{x:0, y:1}, {x:0, y:-1}, {x:1, y:0}, {x:-1, y:0}];
-                    const dir = dirs[Math.floor(Math.random() * dirs.length)];
+                    const dir = AI_DIRS[Math.floor(Math.random() * AI_DIRS.length)];
                     if (!this.lootSystem.isCollidable(pos.x + dir.x, pos.y + dir.y)) {
                         this.gridSystem.moveEntity(id, dir.x, dir.y);
                         stats.lastActionTime = now;
@@ -1826,7 +1829,7 @@ class Game {
                     // Update facing to look at target
                     pos.facing = { x: Math.sign(dx), y: Math.sign(dy) };
                     // Attack (Only if we have actual target/LOS)
-                    this.performAttack(id, nearestPlayer.id);
+                    this.performAttack(id, nearestPlayerId);
                     stats.lastActionTime = now;
                 } else {
                     // Move towards player (Simple Axis-Aligned)
@@ -1863,8 +1866,8 @@ class Game {
         }
     }
 
-    findNearestPlayer(x, y) {
-        let nearest = null;
+    findNearestPlayerId(x, y) {
+        let nearestId = null;
         let minDist = Infinity;
         
         for (const [id, stats] of this.combatSystem.stats) {
@@ -1874,12 +1877,12 @@ class Game {
                     const dist = Math.abs(pos.x - x) + Math.abs(pos.y - y);
                     if (dist < minDist) {
                         minDist = dist;
-                        nearest = { id, x: pos.x, y: pos.y };
+                        nearestId = id;
                     }
                 }
             }
         }
-        return nearest;
+        return nearestId;
     }
 
     showGameOver(msg) {
@@ -1948,6 +1951,9 @@ class Game {
     }
 
     update(dt) {
+        // Cap dt to prevent physics tunneling or spirals of death on lag spikes
+        if (dt > 100) dt = 100;
+
         if (this.state.isHost) {
             // Timer Logic
             this.state.gameTime -= (dt / 1000);
@@ -2038,25 +2044,35 @@ class Game {
         // Update Projectiles (Host Only Simulation)
         if (this.state.isHost) {
             const projSpeed = dt / 1000;
+            
             for (let i = this.state.projectiles.length - 1; i >= 0; i--) {
                 const p = this.state.projectiles[i];
-                p.x += p.vx * p.speed * projSpeed;
-                p.y += p.vy * p.speed * projSpeed;
+                
+                // Sub-step physics to prevent tunneling through walls at high speeds or low framerates
+                const totalMove = p.speed * projSpeed;
+                const steps = Math.ceil(totalMove / 0.5); // Ensure we don't move more than 0.5 tiles per check
+                const stepMove = totalMove / steps;
+                
+                let hit = false;
+                for (let s = 0; s < steps; s++) {
+                    p.x += p.vx * stepMove;
+                    p.y += p.vy * stepMove;
 
-                // Collision Check (Host Authority for Damage, everyone for Wall destroy)
-                const gridX = Math.round(p.x);
-                const gridY = Math.round(p.y);
+                    const gridX = Math.round(p.x);
+                    const gridY = Math.round(p.y);
 
-                if (!this.gridSystem.isWalkable(gridX, gridY)) {
-                    this.state.projectiles.splice(i, 1); // Hit Wall
-                    continue;
-                }
+                    if (!this.gridSystem.isWalkable(gridX, gridY)) {
+                        this.state.projectiles.splice(i, 1); // Hit Wall
+                        hit = true;
+                        break;
+                    }
 
-                if (this.state.isHost) {
                     const hitId = this.gridSystem.getEntityAt(gridX, gridY);
                     if (hitId && hitId !== p.ownerId) {
                         this.combatSystem.applyDamage(hitId, p.damage, p.ownerId);
                         this.state.projectiles.splice(i, 1);
+                        hit = true;
+                        break;
                     }
                 }
             }

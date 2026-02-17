@@ -117,12 +117,14 @@ export default class GridSystem {
         return root;
     }
 
-    getLeaves(node) {
-        if (!node.left && !node.right) return [node];
-        let leaves = [];
-        if (node.left) leaves = leaves.concat(this.getLeaves(node.left));
-        if (node.right) leaves = leaves.concat(this.getLeaves(node.right));
-        return leaves;
+    getLeaves(node, result = []) {
+        if (!node.left && !node.right) {
+            result.push(node);
+            return result;
+        }
+        if (node.left) this.getLeaves(node.left, result);
+        if (node.right) this.getLeaves(node.right, result);
+        return result;
     }
 
     connectBSPNodes(node) {
@@ -319,8 +321,8 @@ export default class GridSystem {
     }
 
     getKey(x, y) {
-        // Integer key optimization to reduce GC pressure from string generation
-        return (Math.round(y) * this.width) + Math.round(x);
+        // Bitwise key optimization (matches LootSystem strategy)
+        return (Math.round(x) & 0xFFFF) | (Math.round(y) << 16);
     }
 
     updateSpatialMap(id, oldX, oldY, newX, newY) {
@@ -538,6 +540,7 @@ export default class GridSystem {
     findPath(startX, startY, endX, endY) {
         // Check if target is walkable to prevent infinite/exhaustion search on unreachable tiles
         if (!this.isWalkable(endX, endY)) return null;
+        if (startX === endX && startY === endY) return [];
 
         // Simple A* Implementation
         const startNode = { x: startX, y: startY, g: 0, h: 0, f: 0, parent: null };

@@ -50,9 +50,19 @@ export default class RenderSystem {
         this.shadowMaskers = []; // Reuse array to reduce GC
         this.shadowPoints = []; // Reuse array for hull calculation
         this.hullBuffer = [];   // Reuse array for hull results
+        this.hullLower = [];    // Reuse buffer for hull calc
+        this.hullUpper = [];    // Reuse buffer for hull calc
+        this.shadowCorners = [ {x:0,y:0}, {x:0,y:0}, {x:0,y:0}, {x:0,y:0} ]; // Reuse corner objects
+        this.shadowPointPool = []; // Pool for projected points
 
         this.bloodParticles = [];
         this.particlePool = [];
+
+        // Shadow Segment Pooling to reduce GC
+        this.segmentPool = [];
+
+        // Render List Pooling
+        this.renderList = [];
     }
 
     setAssetLoader(loader) {
@@ -346,6 +356,13 @@ export default class RenderSystem {
         this.bloodParticles.push(p);
     }
 
+    getShadowPoint() {
+        if (this.shadowPointPool.length > 0) {
+            return this.shadowPointPool.pop();
+        }
+        return { x: 0, y: 0 };
+    }
+
     drawEntities(entities, localPlayerId, drawMode = 'ALL', ctx = this.ctx) {
         const now = Date.now();
         const localPlayer = entities.get(localPlayerId);
@@ -369,7 +386,8 @@ export default class RenderSystem {
         }
 
         // 2. Update Visual State & Prepare Render List
-        const renderList = [];
+        this.renderList.length = 0;
+        const renderList = this.renderList;
 
         entities.forEach((pos, id) => {
             if (drawMode === 'REMOTE' && id === localPlayerId) return;
@@ -440,7 +458,7 @@ export default class RenderSystem {
         // 3. Depth Sort (Y-sort)
         renderList.sort((a, b) => {
             if (a.visual.y !== b.visual.y) return a.visual.y - b.visual.y;
-            return a.id.localeCompare(b.id); // Stable sort fallback
+            return a.id < b.id ? -1 : 1; // Stable sort fallback (faster than localeCompare)
         });
 
         // 4. Render
@@ -779,7 +797,8 @@ export default class RenderSystem {
 
             if (p.life <= 0) {
                 this.particlePool.push(p);
-                this.bloodParticles.splice(i, 1);
+                this.bloodParticles[i] = this.bloodParticles[this.bloodParticles.length - 1];
+                this.bloodParticles.pop();
                 continue;
             }
 
@@ -954,6 +973,18 @@ export default class RenderSystem {
         }
     }
 
+    // Helper to recycle shadow segment objects
+    getShadowSegment(x, y) {
+        if (this.segmentPoolIndex >= this.segmentPool.length) {
+            this.segmentPool.push({ x, y, w: 1 });
+        }
+        const seg = this.segmentPool[this.segmentPoolIndex++];
+        seg.x = x;
+        seg.y = y;
+        seg.w = 1;
+        return seg;
+    }
+
     drawShadowLayer(grid, playerVisual, entities) {
         if (!playerVisual) return;
 
@@ -989,6 +1020,7 @@ export default class RenderSystem {
         //    layer so shadows don't "draw over" the top of walls.
         
         // Reuse arrays to prevent GC
+        this.segmentPoolIndex = 0; // Reset pool pointer
         this.shadowCasters.length = 0;
         this.shadowMaskers.length = 0;
 
@@ -1029,7 +1061,7 @@ export default class RenderSystem {
                     if (maskerSeg) {
                         maskerSeg.w++;
                     } else {
-                        maskerSeg = { x, y, w: 1 }; // Optimization: Could pool these objects too, but simple object creation is fast in V8
+                        maskerSeg = this.getShadowSegment(x, y);
                     }
                 } else {
                     if (maskerSeg) {
@@ -1047,7 +1079,7 @@ export default class RenderSystem {
                     if (casterSeg) {
                         casterSeg.w++;
                     } else {
-                        casterSeg = { x, y, w: 1 };
+                        casterSeg = this.getShadowSegment(x, y);
                     }
                 } else {
                     if (casterSeg) {
@@ -1315,34 +1347,39 @@ export default class RenderSystem {
         // Small epsilon to prevent float precision z-fighting on edges
         const pad = 1;
 
-        const corners = [
-            { x: tx + pad, y: ty + pad },
-            { x: tx + tw - pad, y: ty + pad },
-            { x: tx + tw - pad, y: ty + th - pad },
-            { x: tx + pad, y: ty + th - pad }
-        ];
+        // Reuse static corners array
+        this.shadowCorners[0].x = tx + pad; this.shadowCorners[0].y = ty + pad;
+        this.shadowCorners[1].x = tx + tw - pad; this.shadowCorners[1].y = ty + pad;
+        this.shadowCorners[2].x = tx + tw - pad; this.shadowCorners[2].y = ty + th - pad;
+        this.shadowCorners[3].x = tx + pad; this.shadowCorners[3].y = ty + th - pad;
 
         // Optimization: Reuse array to prevent GC thrashing
+        // Recycle old points back to pool
+        while(this.shadowPoints.length > 0) {
+            const p = this.shadowPoints.pop();
+            // Fix: Do not recycle static corner objects into the dynamic point pool
+            if (!this.shadowCorners.includes(p)) {
+                this.shadowPointPool.push(p);
+            }
+        }
         this.shadowPoints.length = 0;
         const points = this.shadowPoints;
 
         // Use a large distance to ensure shadows extend off-screen
         const projectDist = Math.max(this.canvas.width, this.canvas.height) * 2;
 
-        corners.forEach(c => {
+        for (const c of this.shadowCorners) {
             points.push(c);
             const dx = c.x - lsx;
             const dy = c.y - lsy;
-            // Fast approximate length check to avoid sqrt if possible? No, need normalization.
-            // But we can check if dx/dy are tiny.
             if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
                 const len = Math.sqrt(dx*dx + dy*dy);
-                points.push({
-                    x: c.x + (dx / len) * projectDist,
-                    y: c.y + (dy / len) * projectDist
-                });
+                const p = this.getShadowPoint();
+                p.x = c.x + (dx / len) * projectDist;
+                p.y = c.y + (dy / len) * projectDist;
+                points.push(p);
             }
-        });
+        }
 
         const hull = this.computeConvexHull(points);
 
@@ -1364,21 +1401,29 @@ export default class RenderSystem {
         points.sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
         const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 
-        // Reuse buffer for hull construction? 
-        // It's tricky because we need two stacks. Let's just optimize the array creation slightly.
-        const lower = []; 
+        // Reuse buffers
+        const lower = this.hullLower;
+        const upper = this.hullUpper;
+        lower.length = 0;
+        upper.length = 0;
+
         for (let p of points) {
             while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
             lower.push(p);
         }
-        const upper = []; 
         for (let i = points.length - 1; i >= 0; i--) {
             const p = points[i];
             while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
             upper.push(p);
         }
         upper.pop(); lower.pop();
-        return lower.concat(upper);
+        
+        // Optimization: Reuse hullBuffer instead of concat (which allocates new arrays)
+        this.hullBuffer.length = 0;
+        for (let i = 0; i < lower.length; i++) this.hullBuffer.push(lower[i]);
+        for (let i = 0; i < upper.length; i++) this.hullBuffer.push(upper[i]);
+        
+        return this.hullBuffer;
     }
 
     render(grid, entities, loot, projectiles, interaction, localPlayerId) {

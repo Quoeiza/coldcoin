@@ -15,7 +15,9 @@ export default class LootSystem {
     }
 
     _getSpatialKey(x, y) {
-        return `${Math.round(x)},${Math.round(y)}`;
+        // Use bitwise integer key for performance (x | y << 16)
+        // Safe for coordinates up to 65535
+        return (Math.round(x) & 0xFFFF) | (Math.round(y) << 16);
     }
 
     _addToSpatial(loot) {
