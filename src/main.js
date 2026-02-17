@@ -110,6 +110,13 @@ class Game {
         const uiLayer = document.getElementById('ui-layer');
         const lobby = document.createElement('div');
         lobby.id = 'lobby-screen';
+
+        // Set background image for main menu
+        lobby.style.backgroundImage = "url('./assets/images/ui/bg.jpg')";
+        lobby.style.backgroundSize = "cover";
+        lobby.style.backgroundPosition = "center";
+        lobby.style.backgroundRepeat = "no-repeat";
+
         lobby.innerHTML = `
             <h1>Cold Coin</h1>
             <div id="player-stats">Gold: ${this.playerData.gold} | Extractions: ${this.playerData.extractions || 0}</div>
