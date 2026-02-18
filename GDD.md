@@ -4,17 +4,16 @@
 
 ## **Game Concept**
 
-Cold Coin is a browser-based, multiplayer, 2D top-down dungeon crawling game with a strong focus on Player vs. Player (PvP) extraction mechanics. Players enter procedurally generated dungeons, gather loot, and must successfully extract to keep their rewards. The core loop is built around risk-reward decision-making, limited resources, and intense player encounters in short 15 minute matches.
+Cold Coin is a browser-based, real-time multiplayer, 2D top-down dungeon crawling game with a strong focus on Player vs. Player (PvP) extraction mechanics. Players enter procedurally generated dungeons, gather loot, and must successfully extract to keep their rewards. The twist is that dead players become the monsters and get to hunt the remaining players. The core loop is built around risk-reward decision-making, limited resources, and intense player encounters in short matches.
 
 ## **Core Influences**
 
 The primary influences are the following games. Whenever ambiguous about any design decision, refer to how these games achieved their goals:
 
 * “Dark & Darker”  
-* “Dungeonborne”  
+* “Stoneshard”
+* “Dungeonmans”  
 * “Crawl”  
-* “He is Coming”  
-* “Dungeonmans”
 
 ## **Target Audience**
 
@@ -30,7 +29,7 @@ The primary target audience is players who enjoy competitive, session-based game
 
 1. **Enter:** Player joins automatic matchmaking, or a specific room via a 4-character code. Host starts the game.  
 2. **Crawl:** Player navigates a grid tile-based, procedurally generated dungeon, fighting monsters and finding loot/resources.  
-3. **PvP:** Player encounters other live players and engage in combat.  
+3. **PvP:** Player encounters other live players and avoid or engage in combat.  
 4. **Death/Monster Mechanic:** Eliminated players respawn as one of the maps monsters to attack the remaining survivors. The monsters will be rewarded for player damage and kills.  
 5. **Extract:** Remaining players must reach an extraction zone before the dungeon collapses or the timer runs out.  
 6. **Progress:** Successful extraction secures loot, which contributes to persistent player progression (e.g., new starting gear).
@@ -47,55 +46,13 @@ The primary target audience is players who enjoy competitive, session-based game
 | Hosting | GitHub Pages | Zero-cost, decentralized hosting solution. |
 | Database | PostgresSQL | Player account details and inventory storage. |
 
-## **Github Directory Structure**
-
-Strict adherence to this structure is required to maintain separation between Game Logic (AI) and Game Data (Human).
-
-/  
-├── index.html                  \# Entry point. Canvas setup and UI overlays.  
-├── css/  
-│   └── main.css                \# Global styles, UI positioning, responsive rules.  
-├── assets/                     \# Initially all graphics and audio will be generated programmatically.  
-│   ├── images/                 \# All graphical assets (sprites/placeholders).  
-│   └── audio/                  \# SFX and music files.  
-├── config/                     \# Game balance and content definitions.  
-│   ├── items.json              \# Definitions of loot, weapons, and consumables.  
-│   ├── enemies.json            \# Stats for monsters (HP, Damage, Sprite refs).  
-│   ├── global.json             \# Game loop constants (tick rate, extraction times).  
-│   └── networking.json         \# PeerJS and Database configuration keys.  
-├── src/                        \# Game Logic and Source Code.  
-│   ├── main.js                 \# Bootstrapper. Initializes Game and Network.  
-│   ├── core/  
-│   │   ├── GameLoop.js         \# Main update loop (fixed time step).  
-│   │   ├── InputManager.js     \# Maps Keys/Touch to Intent (North, Attack, etc).  
-│   │   └── EventEmitter.js     \# Pub/Sub system for decoupled communication.  
-│   ├── systems/  
-│   │   ├── GridSystem.js       \# Tile-based movement and collision logic.  
-│   │   ├── CombatSystem.js     \# Damage calculation, death, and respawn logic.  
-│   │   ├── LootSystem.js       \# Spawning, pickup, and inventory management.  
-│   │   └── RenderSystem.js     \# Draws state to Canvas (supports placeholders/sprites).  
-│   ├── network/  
-│   │   ├── PeerClient.js       \# Wraps PeerJS for P2P lobby and data transport.  
-│   │   └── SyncManager.js      \# Handles state serialization and interpolation.  
-│   ├── services/  
-│   │   └── Database.js         \# secure API calls to external DB (Save/Load).  
-│   └── utils/  
-│       └── AssetLoader.js      \# Preloads images/audio before game start.  
-└── GDD.md                      \# This Game Design Document! Source of truth.
-
-### **The Configuration Layer (`/config/*.json`)**
-
-* **Rule:** The AI must treat these files as **Read-Only** sources of truth for gameplay values.  
-* **Usage:** When creating a monster, do not hardcode `HP = 100`. Instead, read `enemies.json` and find the entry for that monster type.  
-* **Benefit:** This allows the Human Developer to balance the game, add new swords, or change drop rates without modifying the codebase.
-
 ### **The Logic Layer (`/src/`)**
 
 * **ES6 Modules:** All files must use `export default` or named exports. No inline scripts in HTML.  
 * **State Management:**  
   * **Local State:** UI quirks, particles, animations.  
   * **Authoritative State:** Player coordinates, Health, Inventory. Only the **HOST** modifies this. Clients only visualize it.  
-* **Graphics Agnosticism:** The `RenderSystem` should draw whatever image is assigned to an entity in the config. If `items.json` says "sword\_1.png", the code attempts to load that. This allows seamless transition from generated art to pixel art.
+* **Graphics Agnosticism:** The `RenderSystem` should draw whatever image is assigned to an entity.
 
 ## **Network Architecture**
 
@@ -121,7 +78,7 @@ Strict adherence to this structure is required to maintain separation between Ga
 
 | Constraint | Mitigation Strategy |
 | :---- | :---- |
-| Low Bandwidth/Latency | **Global Cooldown:** All player-initiated actions (movement, attacks) are throttled by a **250ms global cooldown** (4 actions/second max). This time may be altered later, possibly 500ms instead? Requires testing for fun and balance. |
+| Low Bandwidth/Latency | **Global Cooldown:** All ingame actions (movements, attacks, etc) are synchronised to a **250ms global cooldown** (4 actions/second max). |
 | Data Transfer Rate | **Input-Only Networking:** Only player inputs (e.g., move, attack) are transmitted, not regular full positional data. Target network rate is approx. **5-10Hz**. |
 | Visual Smoothness | **Client Interpolation:** The client visually smooths movements between received Host state updates to prevent a choppy experience. |
 | Host Dropouts | **Pause-and-Reconnect:** If the Host is lost, the game pauses. A new Host is auto-elected, and remaining players attempt to reconnect and resync state. |
