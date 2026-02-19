@@ -1,5 +1,5 @@
-import Game from './core/GameLoop.js';
+import GameLoop from './core/GameLoop.js';
 
-const game = new Game();
+const game = new GameLoop();
 window.game = game;
 window.onload = () => game.init();

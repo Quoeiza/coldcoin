@@ -1,5 +1,6 @@
 import AssetSystem from '../systems/AssetSystem.js';
-import InputManager, { DIRECTIONS } from './InputManager.js';
+import InputManager from './InputManager.js';
+import Ticker from './Ticker.js';
 import GridSystem from '../systems/GridSystem.js';
 import RenderSystem from '../systems/RenderSystem.js';
 import CombatSystem from '../systems/CombatSystem.js';
@@ -11,7 +12,7 @@ import Database from '../services/Database.js';
 import UISystem from '../systems/UISystem.js';
 import AISystem from '../systems/AISystem.js';
 
-export default class Game {
+export default class GameLoop {
     constructor() {
         this.assetSystem = new AssetSystem();
         this.state = {
@@ -23,22 +24,35 @@ export default class Game {
             actionBuffer: null,
             nextActionTime: 0,
             projectiles: [],
-            interaction: null, // { type, targetId, startTime, duration, x, y }
+            interaction: null,
             lavaTimer: 0,
             netTimer: 0,
             handshakeInterval: null,
             isExtracting: false,
-            autoPath: [], // For Auto-Explore
+            autoPath: [],
             chaseTargetId: null
         };
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
+        
+        // Delegate loop handling to core utility
+        this.ticker = new Ticker(
+            (dt) => this.update(dt), 
+            (alpha) => this.render(alpha),
+            20 // Tick rate (will be overwritten by config)
+        );
     }
 
     async init() {
         // 1. Load Configuration
         const configs = await this.assetSystem.loadAll();
         this.config = configs;
+
+        // Update loop tick rate from config
+        if (this.config.global && this.config.global.tickRate) {
+            this.ticker.tickRate = this.config.global.tickRate;
+            this.ticker.timePerTick = 1000 / this.config.global.tickRate;
+        }
 
         // TEST OVERRIDE: Replace all enemies with Skeleton
         this.config.enemies = {
@@ -54,7 +68,7 @@ export default class Game {
         // 2. Load Player Data
         this.playerData = (await this.database.getPlayer()) || { name: 'Player', gold: 0, extractions: 0 };
 
-        // 4. Initialize Systems (Pre-allocation)
+        // 3. Initialize Systems
         const global = configs.global || {};
         this.gridSystem = new GridSystem(
             global.dungeonWidth || 48, 
@@ -82,11 +96,10 @@ export default class Game {
         this.uiSystem = new UISystem(this);
         this.aiSystem = new AISystem(this.gridSystem, this.combatSystem, this.lootSystem);
 
-        // 3. Show Lobby
+        // 4. Show Lobby
         this.uiSystem.setupLobby();
         
         // 5. Check for Auto-Join URL
-        // Check URL params for ?join=HOST_ID
         const urlParams = new URLSearchParams(window.location.search);
         const hostId = urlParams.get('join');
         if (hostId) {
@@ -124,16 +137,15 @@ export default class Game {
         this.inputManager.on('intent', (intent) => this.handleInput(intent));
         this.inputManager.on('click', (data) => this.handleMouseClick(data));
         this.inputManager.on('mousemove', (data) => this.handleMouseMove(data));
-        this.audioSystem.resume(); // Unlock audio context on user interaction
+        this.audioSystem.resume();
 
-        this.startLoop();
+        this.ticker.start();
 
-        // Namespace the ID to avoid collisions on public PeerJS server
         const myPeerId = isHost ? `coldcoin-${this.generateRoomCode()}` : undefined;
         this.peerClient.init(myPeerId);
         this.peerClient.on('ready', (id) => {
             if (isHost) {
-                const displayId = id.replace('coldcoin-', ''); // Strip prefix for display
+                const displayId = id.replace('coldcoin-', '');
                 this.startHost(id);
                 document.getElementById('room-code-display').innerText = `Room: ${displayId}`;
             } else if (hostId) {
@@ -143,36 +155,7 @@ export default class Game {
         });
     }
 
-    startLoop() {
-        let lastTime = 0;
-        const tickRate = this.config.global.tickRate || 60;
-        const step = 1000 / tickRate;
-        let accumulator = 0;
-
-        const loop = (timestamp) => {
-            if (!lastTime) lastTime = timestamp;
-            const dt = timestamp - lastTime;
-            lastTime = timestamp;
-            
-            accumulator += dt;
-            while (accumulator >= step) {
-                this.update(step);
-                accumulator -= step;
-            }
-            
-            this.render(accumulator / step);
-            this.animationFrameId = requestAnimationFrame(loop);
-        };
-        this.animationFrameId = requestAnimationFrame(loop);
-    }
-
-    stopLoop() {
-        if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
-    }
-
     handleDropItem(itemId, source) {
-        // Logic to drop item on the floor
-        // 1. Remove from inventory/equipment
         if (!this.state.isHost) {
             this.peerClient.send({ type: 'DROP_ITEM', payload: { itemId, source } });
             return;
@@ -187,13 +170,10 @@ export default class Game {
             else count = 0;
         }
 
-        // 2. Spawn in world (Host authoritative, so send intent if client)
         const pos = this.gridSystem.entities.get(this.state.myId);
         if (pos) {
             if (this.state.isHost) {
                 if (count > 0) this.lootSystem.spawnDrop(pos.x, pos.y, itemId, count);
-            } else {
-                console.warn("Client drop not fully implemented over network yet");
             }
         }
         this.uiSystem.renderInventory();
@@ -232,19 +212,16 @@ export default class Game {
         }
 
         if (result) {
-            // Handle Gold
             if (result.gold > 0) {
                 if (entityId === this.state.myId) {
                     this.playerData.gold += result.gold;
                     this.uiSystem.updateGoldUI();
-                    this.uiSystem.renderInventory(); // Update UI for item pickup
+                    this.uiSystem.renderInventory();
                 } else if (this.state.isHost) {
-                    // If host processing for client, send gold update
                     this.peerClient.send({ type: 'UPDATE_GOLD', payload: { id: entityId, amount: result.gold } });
                 }
             }
 
-            // Play sound for specific player
             if (entityId === this.state.myId) {
                 this.audioSystem.play('pickup');
                 this.uiSystem.updateQuickSlotUI();
@@ -253,7 +230,6 @@ export default class Game {
                 this.uiSystem.showNotification(`${itemName}${goldText}`);
                 this.renderSystem.addFloatingText(this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y, `+${itemName}`, '#FFD700');
             } else {
-                // Notify client
                 this.peerClient.send({ type: 'LOOT_SUCCESS', payload: { id: entityId } });
                 if (this.state.isHost) this.sendInventoryUpdate(entityId);
             }
@@ -271,7 +247,6 @@ export default class Game {
     setupNetwork() {
         this.peerClient.on('ready', (id) => {
             this.state.myId = id;
-            // Do NOT update room-code-display here, as it shows the internal UUID for clients
         });
 
         this.peerClient.on('close', (id) => {
@@ -283,47 +258,34 @@ export default class Game {
             }
         });
 
-        // Combat Events (Local & Networked)
         this.combatSystem.on('damage', ({ targetId, amount, currentHp, sourceId, options }) => {
-            // Update UI if it's me
             if (targetId === this.state.myId) {
                 const hpEl = document.getElementById('hp-val');
                 if (hpEl) hpEl.innerText = Math.max(0, currentHp);
-                this.renderSystem.triggerShake(5, 200); // Screen shake on damage
+                this.renderSystem.triggerShake(5, 200);
                 this.audioSystem.play('hit', this.gridSystem.entities.get(targetId).x, this.gridSystem.entities.get(targetId).y);
             }
 
-            // Floating Damage Text
             const pos = this.gridSystem.entities.get(targetId);
             if (pos) {
                 const color = amount > 0 ? '#ff4444' : '#44ff44';
                 let text = Math.abs(amount).toString();
-                
-                if (options && options.isCrit) {
-                    text += "!";
-                }
-
+                if (options && options.isCrit) text += "!";
                 this.renderSystem.addFloatingText(pos.x, pos.y, text, color);
                 
-                // Broadcast to clients
                 if (this.state.isHost) {
                     this.peerClient.send({ type: 'FLOAT_TEXT', payload: { x: pos.x, y: pos.y, text, color } });
                 }
             }
 
-            // Visual Feedback (Flash, Recoil, Blood)
             this.renderSystem.triggerDamage(targetId, sourceId);
 
-            // If Host, broadcast HP update to all clients
             if (this.state.isHost) {
                 this.peerClient.send({ type: 'UPDATE_HP', payload: { id: targetId, hp: currentHp } });
             }
         });
 
         this.combatSystem.on('death', ({ entityId, killerId, stats }) => {
-            console.log(`${entityId} killed by ${killerId}`);
-            
-            // Capture position before removal for loot drop
             const deathPos = this.gridSystem.entities.get(entityId);
             const deathX = deathPos ? deathPos.x : 0;
             const deathY = deathPos ? deathPos.y : 0;
@@ -333,9 +295,8 @@ export default class Game {
             this.audioSystem.play('death', deathX, deathY);
             
             if (this.state.isHost) {
-                // Award Gold
                 if (!stats.isPlayer && stats.team === 'monster' && killerId) {
-                    const reward = Math.floor(Math.random() * 4) + 2; // 2-5 gold
+                    const reward = Math.floor(Math.random() * 4) + 2;
                     if (killerId === this.state.myId) {
                         this.playerData.gold += reward;
                         this.uiSystem.updateGoldUI();
@@ -348,13 +309,9 @@ export default class Game {
 
                 this.peerClient.send({ type: 'ENTITY_DEATH', payload: { id: entityId } });
                 
-                // 1. Spawn Loot
-                // Drop all items in a bag at the location of death
-                // Use captured death coordinates
                 let dropX = deathX;
                 let dropY = deathY;
                 
-                // Fallback if position was somehow invalid
                 if (!deathPos && killerId) {
                     const kPos = this.gridSystem.entities.get(killerId);
                     if (kPos) { dropX = kPos.x; dropY = kPos.y; }
@@ -363,13 +320,11 @@ export default class Game {
                 const items = this.lootSystem.getAllItems(entityId);
                 this.lootSystem.createLootBag(dropX, dropY, items);
                 
-                // 2. Monster Mechanic: Respawn Player as Monster
                 if (stats && stats.isPlayer) {
                     setTimeout(() => {
                         this.respawnAsMonster(entityId);
                     }, 3000);
                 } else {
-                    // Test Mode: Respawn AI Monster
                     setTimeout(() => {
                         const newId = `ai_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
                         const spawn = this.gridSystem.getSpawnPoint();
@@ -385,7 +340,6 @@ export default class Game {
 
         this.peerClient.on('data', ({ sender, data }) => {
             if (this.state.isHost) {
-                // Host Logic: Receive Inputs
                 if (data.type === 'INPUT') {
                     this.processPlayerInput(sender, data.payload);
                 }
@@ -394,35 +348,28 @@ export default class Game {
                     if (loot) this.processLootInteraction(sender, loot);
                 }
                 if (data.type === 'HELLO') {
-                    // Client is ready, send the world state
-                    console.log(`Client ${sender} said HELLO. Sending World.`);
                     this.peerClient.sendTo(sender, {
                         type: 'INIT_WORLD',
                         payload: { grid: this.gridSystem.grid }
                     });
                 }
                 if (data.type === 'EQUIP_ITEM') {
-                    this.handleEquipItem(data.payload.itemId, data.payload.slot); // Host executes locally for client
+                    this.handleEquipItem(data.payload.itemId, data.payload.slot);
                     this.sendInventoryUpdate(sender);
                 }
                 if (data.type === 'DROP_ITEM') {
-                    this.handleDropItem(data.payload.itemId, data.payload.source); // Host executes locally for client
+                    this.handleDropItem(data.payload.itemId, data.payload.source);
                     this.sendInventoryUpdate(sender);
                 }
             } else {
-                // Client Logic: Receive State
                 if (data.type === 'SNAPSHOT') {
                     this.syncManager.addSnapshot(data.payload);
                 } else if (data.type === 'INIT_WORLD') {
-                    console.log("Client: Received INIT_WORLD", data.payload);
                     this.gridSystem.setGrid(data.payload.grid);
-                    
-                    // Stop the handshake retry loop
                     if (this.state.handshakeInterval) {
                         clearInterval(this.state.handshakeInterval);
                         this.state.handshakeInterval = null;
                     }
-                    
                     this.state.connected = true;
                 } else if (data.type === 'UPDATE_HP') {
                     if (data.payload.id === this.state.myId) {
@@ -455,10 +402,6 @@ export default class Game {
                 }
                 
                 if (data.type === 'SPAWN_PROJECTILE') {
-                    // We use this event primarily for Audio now.
-                    // Visuals are handled via Snapshot Sync.
-                    // this.state.projectiles.push(data.payload); 
-                    // ^ Removed to prevent duplication with SyncManager
                     this.audioSystem.play('attack', data.payload.x, data.payload.y);
                 }
 
@@ -473,17 +416,13 @@ export default class Game {
 
                 if (data.type === 'LOOT_SUCCESS') {
                     if (data.payload.id === this.state.myId) {
-                        this.audioSystem.play('pickup', 0, 0); // Local
+                        this.audioSystem.play('pickup', 0, 0);
                         this.uiSystem.renderInventory();
                         this.uiSystem.updateQuickSlotUI();
-                        // We don't have the item ID here easily without sending it in payload
-                        // For now, just generic sound/update is okay, or we can update protocol later.
-                        // The prompt asked for notification on looting from chest, which usually happens locally or via direct interaction response.
                     }
                 }
 
                 if (data.type === 'UPDATE_INVENTORY') {
-                    // Direct injection into LootSystem (assuming Map structure based on other Systems)
                     if (this.lootSystem.inventories) this.lootSystem.inventories.set(this.state.myId, data.payload.inventory);
                     if (this.lootSystem.equipment) this.lootSystem.equipment.set(this.state.myId, data.payload.equipment);
                     this.uiSystem.renderInventory();
@@ -492,16 +431,11 @@ export default class Game {
         });
 
         this.peerClient.on('connected', ({ peerId, metadata }) => {
-            console.log(`Connected to ${peerId}`, metadata);
             if (this.state.isHost) {
-                // Spawn them
                 const spawn = this.gridSystem.getSpawnPoint(true);
                 this.gridSystem.addEntity(peerId, spawn.x, spawn.y);
                 this.combatSystem.registerEntity(peerId, 'player', true, metadata.class || 'Fighter', metadata.name || 'Unknown');
             } else {
-                // Client: Start Handshake Retry Loop
-                // Send HELLO every 500ms until INIT_WORLD is received
-                console.log("Client: Connected. Starting Handshake...");
                 this.state.handshakeInterval = setInterval(() => {
                     if (!this.state.connected) this.peerClient.send({ type: 'HELLO' });
                 }, 500);
@@ -517,7 +451,6 @@ export default class Game {
         this.gridSystem.initializeDungeon();
         this.gridSystem.populate(this.combatSystem, this.lootSystem, this.config);
         
-        // Spawn Host
         const spawn = this.gridSystem.getSpawnPoint(true);
         this.gridSystem.addEntity(id, spawn.x, spawn.y);
         this.combatSystem.registerEntity(id, 'player', true, this.playerData.class, this.playerData.name);
@@ -559,7 +492,6 @@ export default class Game {
     handleMouseClick(data) {
         if (!this.state.myId || !this.state.connected) return;
         
-        // Close Context Menu on any canvas interaction
         this.uiSystem.hideContextMenu();
 
         if (data.button === 2) {
@@ -567,7 +499,7 @@ export default class Game {
             return;
         }
 
-        if (data.button !== 0) return; // Only Left Click for rest
+        if (data.button !== 0) return;
 
         const cam = this.renderSystem.camera;
         const ts = this.config.global.tileSize || 48;
@@ -585,20 +517,15 @@ export default class Game {
         let targetId = this.gridSystem.getEntityAt(gridX, gridY);
         const loot = this.lootSystem.getLootAt(gridX, gridY);
 
-        // Smart Targeting (Continuous Hold Only)
-        // Scans a radius around the cursor to lock onto enemies, making chasing easier.
         if (isContinuous) {
-            const bestId = this.findBestTarget(gridX, gridY, 3); // 3 Tile Radius
+            const bestId = this.findBestTarget(gridX, gridY, 3);
             if (bestId) {
                 targetId = bestId;
             }
         }
 
-        // Determine if this is an Attack Command
-        // Shift forces attack. Clicking a hostile entity implies attack.
         const isHostile = targetId && targetId !== this.state.myId;
 
-        // Melee Chase Logic
         if (isHostile && !shift) {
             const equip = this.lootSystem.getEquipment(this.state.myId);
             const weaponId = equip.weapon;
@@ -608,10 +535,9 @@ export default class Game {
             if (!isRanged) {
                 const dist = Math.max(Math.abs(gridX - pos.x), Math.abs(gridY - pos.y));
                 if (dist > 1) {
-                    // Move-to-Attack
                     const path = this.gridSystem.findPath(pos.x, pos.y, gridX, gridY);
                     if (path && path.length > 0) {
-                        path.pop(); // Remove target tile
+                        path.pop();
                         this.state.autoPath = path;
                         this.state.chaseTargetId = targetId;
                     }
@@ -620,36 +546,25 @@ export default class Game {
             }
         }
 
-        // Determine if this is an Attack Command
-        // Shift forces attack. Clicking a hostile entity implies attack.
         const isAttack = shift || isHostile;
 
         if (isAttack) {
-            // Attack logic is handled via polling in update() to support holding
             this.state.autoPath = [];
             this.state.chaseTargetId = null;
             
-            // Generate Attack Intent directly here
-            // We need a projId for prediction consistency if ranged
             const projId = `proj_${Date.now()}_${this.state.myId}`;
             this.handleInput({ type: 'TARGET_ACTION', x: gridX, y: gridY, projId: projId });
             return; 
         }
 
-        // Move / Interact Logic (No Shift, No Hostile)
         if (loot) {
-            // Object: Pathfind + Interact
             const path = this.gridSystem.findPath(pos.x, pos.y, gridX, gridY);
             if (path && path.length > 0) {
-                // Remove last node (the target itself) to stop adjacent
                 path.pop(); 
                 this.state.autoPath = path;
             }
         } else {
-            // Terrain: Pathfind
             let path = this.gridSystem.findPath(pos.x, pos.y, gridX, gridY);
-            
-            // Fallback: Straight line attempt if pathfinding failed (e.g. target is wall)
             if (!path) {
                 path = this.gridSystem.getStraightPath(pos.x, pos.y, gridX, gridY);
             }
@@ -657,7 +572,6 @@ export default class Game {
             if (path) {
                 this.state.autoPath = path;
             } else {
-                // Invalid path (e.g. wall), stop moving
                 this.state.autoPath = [];
             }
         }
@@ -668,7 +582,7 @@ export default class Game {
         if (!myStats) return null;
 
         let bestId = null;
-        let minDst = radius * radius; // Squared distance comparison
+        let minDst = radius * radius;
 
         for (const [id, pos] of this.gridSystem.entities) {
             if (id === this.state.myId) continue;
@@ -676,13 +590,10 @@ export default class Game {
             const stats = this.combatSystem.getStats(id);
             if (!stats) continue;
 
-            // Hostility Check
             let isHostile = false;
             if (myStats.team === 'monster') {
-                // Monsters only attack players
                 if (stats.team === 'player') isHostile = true;
             } else {
-                // Players attack monsters and other players (PvP)
                 if (stats.team === 'monster' || stats.team === 'player') isHostile = true;
             }
             
@@ -709,9 +620,7 @@ export default class Game {
         this.state.nextActionTime = Date.now() + cooldown;
         this.state.actionBuffer = null;
 
-        // Client-Side Prediction: Move immediately
         if (!this.state.isHost && intent.type === 'MOVE') {
-            // We process the input locally to update gridSystem immediately
             this.processPlayerInput(this.state.myId, intent);
         }
 
@@ -723,12 +632,10 @@ export default class Game {
     }
 
     processPlayerInput(entityId, intent) {
-        if (!intent || !intent.type) return; // Safeguard against malformed inputs
+        if (!intent || !intent.type) return;
 
-        // Host-side Cooldown Enforcement
         let stats = this.combatSystem.getStats(entityId);
 
-        // Client-Side Prediction Fix: Ensure local stats exist for cooldown tracking
         if (!stats && entityId === this.state.myId && !this.state.isHost) {
             this.combatSystem.registerEntity(entityId, 'player', true, this.playerData.class, this.playerData.name);
             stats = this.combatSystem.getStats(entityId);
@@ -737,28 +644,22 @@ export default class Game {
         let now = Date.now();
         let cooldown = this.config.global.globalCooldownMs || 250;
 
-        // Agility Scaling for Action Speed
         if (stats && stats.attributes) {
-            // 15 Agi = 100% speed. 30 Agi = 50% cooldown.
             const agiFactor = Math.max(0.5, 1 - ((stats.attributes.agi - 10) * 0.02));
             cooldown *= agiFactor;
         }
 
-        // Apply Terrain Movement Cost
         const pos = this.gridSystem.entities.get(entityId);
         
-        // Shift Modifier: Facing Update Only
         if (intent.type === 'MOVE' && intent.shift) {
             if (pos) {
                 pos.facing = intent.direction;
                 
-                // Check for Ranged Weapon
                 const equip = this.lootSystem.getEquipment(entityId);
                 const weaponId = equip.weapon;
                 const config = weaponId ? this.lootSystem.getItemConfig(weaponId) : null;
 
                 if (config && config.range > 1) {
-                    // Fire Projectile
                     const proj = { 
                         id: `proj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
                         x: pos.x, 
@@ -773,7 +674,6 @@ export default class Game {
                     this.peerClient.send({ type: 'SPAWN_PROJECTILE', payload: proj });
                     this.audioSystem.play('attack', pos.x, pos.y);
                 } else {
-                    // Melee
                     const tx = pos.x + intent.direction.x;
                     const ty = pos.y + intent.direction.y;
                     const targetId = this.gridSystem.getEntityAt(tx, ty);
@@ -781,7 +681,6 @@ export default class Game {
                     if (targetId) {
                         this.performAttack(entityId, targetId);
                     } else {
-                        // Whiff
                         this.renderSystem.triggerAttack(entityId);
                         this.renderSystem.addEffect(tx, ty, 'slash');
                         this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
@@ -789,7 +688,7 @@ export default class Game {
                     }
                 }
             }
-            return; // Suppress position update
+            return;
         }
 
         if (pos && intent.type === 'MOVE') {
@@ -797,19 +696,17 @@ export default class Game {
             cooldown *= cost;
         }
 
-        if (!stats) return; // Strict check: No stats = No action
+        if (!stats) return;
         if (now - stats.lastActionTime < cooldown) {
-            return; // Action rejected due to cooldown
+            return;
         }
         stats.lastActionTime = now;
 
-        // Cancel Interaction on any input
         if (entityId === this.state.myId && this.state.interaction) {
             this.state.interaction = null;
         }
 
         if (intent.type === 'MOVE') {
-            // Capture start position for effects (before mutation)
             const startX = pos ? pos.x : 0;
             const startY = pos ? pos.y : 0;
 
@@ -817,33 +714,26 @@ export default class Game {
                 const tx = pos.x + intent.direction.x;
                 const ty = pos.y + intent.direction.y;
                 
-                // Check Loot Collision (Closed Chests)
                 if (this.lootSystem.isCollidable(tx, ty)) {
-                    // Pivot facing even if blocked
                     pos.facing = { x: intent.direction.x, y: intent.direction.y };
                     
-                    // Bump to Open Logic
                     const items = this.lootSystem.getItemsAt(tx, ty);
                     const chest = items.find(l => l.type === 'chest' && !l.opened);
                     if (chest) {
                         this.processLootInteraction(entityId, chest);
                     }
-                    return; // Block movement
+                    return;
                 }
             }
 
             const result = this.gridSystem.moveEntity(entityId, intent.direction.x, intent.direction.y);
             
-            // Wall Sliding Logic: If diagonal move hits wall, try cardinal components
             if (!result.success && result.collision === 'wall') {
                 if (intent.direction.x !== 0 && intent.direction.y !== 0) {
-                    // Try sliding along X
                     const resX = this.gridSystem.moveEntity(entityId, intent.direction.x, 0);
                     if (resX.success) {
-                        // Mutate result to the successful slide
                         Object.assign(result, resX);
                     } else {
-                        // Try sliding along Y
                         const resY = this.gridSystem.moveEntity(entityId, 0, intent.direction.y);
                         if (resY.success) {
                             Object.assign(result, resY);
@@ -855,20 +745,15 @@ export default class Game {
             if (result.success) {
                 if (entityId === this.state.myId) {
                     this.audioSystem.play('step', pos.x, pos.y);
-                    this.renderSystem.addEffect(startX, startY, 'dust'); // Dust particle
+                    this.renderSystem.addEffect(startX, startY, 'dust');
                 }
                 
-                // Check for Extraction
-                // Round coordinates to ensure valid grid access (prevent float indexing)
                 if (pos && this.gridSystem.grid[Math.round(pos.y)][Math.round(pos.x)] === 9) {
                     this.handleExtraction(entityId);
                 }
             } else if (result.collision !== 'wall') {
-                // Trigger Bump for entity collision too
                 this.renderSystem.triggerBump(entityId, intent.direction);
 
-                // Bump Attack
-                // Check Friendly Fire for Monsters
                 const attackerStats = this.combatSystem.getStats(entityId);
                 const targetStats = this.combatSystem.getStats(result.collision);
                 
@@ -881,7 +766,6 @@ export default class Game {
                     this.performAttack(entityId, result.collision);
                 }
             } else if (result.collision === 'wall') {
-                // Trigger Bump for wall
                 this.renderSystem.triggerBump(entityId, intent.direction);
                 if (entityId === this.state.myId) {
                     this.audioSystem.play('bump', pos.x, pos.y);
@@ -890,18 +774,15 @@ export default class Game {
         }
         
         if (intent.type === 'INTERACT') {
-            // Context-Sensitive Interact (Space/Enter)
             if (pos) {
                 const tx = pos.x + pos.facing.x;
                 const ty = pos.y + pos.facing.y;
-                // 1. Check for Entity (Monster/Player) -> Attack
                 const targetId = this.gridSystem.getEntityAt(tx, ty);
                 if (targetId) {
                     this.performAttack(entityId, targetId);
                     return;
                 }
 
-                // 2. Check for Loot/Chest -> Interact
                 const items = this.lootSystem.getItemsAt(tx, ty);
                 if (items.length > 0) {
                     if (entityId === this.state.myId) this.handleInteractWithLoot(items[0]);
@@ -909,7 +790,6 @@ export default class Game {
                     return;
                 }
 
-                // 3. Nothing -> Whiff Attack
                 this.renderSystem.triggerAttack(entityId);
                 this.renderSystem.addEffect(tx, ty, 'slash');
                 this.peerClient.send({ type: 'EFFECT', payload: { x: tx, y: ty, type: 'slash' } });
@@ -917,36 +797,29 @@ export default class Game {
             }
         }
 
-        if (intent.type === 'PICKUP') { // Legacy R key
+        if (intent.type === 'PICKUP') {
             const stats = this.combatSystem.getStats(entityId);
             
-            // Monster Restriction: Cannot pickup items
             if (stats && stats.team === 'monster') {
                 return;
             }
 
-                // Check for Interaction Targets (Chest/Extraction)
                 const itemsBelow = this.lootSystem.getItemsAt(pos.x, pos.y);
                 const fx = pos.x + pos.facing.x;
                 const fy = pos.y + pos.facing.y;
                 const itemsFront = this.lootSystem.getItemsAt(fx, fy);
                 const allItems = [...itemsBelow, ...itemsFront].filter(l => !l.opened);
 
-                // Prioritize Chests for Interaction Timer
                 const chest = allItems.find(i => i.type === 'chest');
                 if (chest && entityId === this.state.myId) {
-                    // Start Interaction
                     this.state.interaction = { type: 'chest', target: chest, startTime: Date.now(), duration: 2000 };
                     return;
                 }
 
-                // Aggregate items from Below and Front
                 if (allItems.length > 0) {
                     if (allItems.length > 1) {
-                        // Show Menu (Only for local player)
                         if (entityId === this.state.myId) this.uiSystem.showGroundLoot(allItems);
                     } else {
-                        // Interact directly
                         if (entityId === this.state.myId) this.handleInteractWithLoot(allItems[0]);
                         else this.processLootInteraction(entityId, allItems[0]); 
                     }
@@ -954,21 +827,17 @@ export default class Game {
         }
 
         if (intent.type === 'TARGET_ACTION') {
-            // Mouse-based Attack Logic (Moved from handleMouseClick)
             const gridX = intent.x;
             const gridY = intent.y;
             
-            // 1. Get Weapon Config
             const equip = this.lootSystem.getEquipment(entityId);
             const weaponId = equip.weapon;
             const config = weaponId ? this.lootSystem.getItemConfig(weaponId) : null;
             const isRanged = config && config.range > 1;
 
-            // 2. Calculate Vector & Facing
             const dx = gridX - pos.x;
             const dy = gridY - pos.y;
             
-            // Avoid division by zero if clicking self
             if (dx !== 0 || dy !== 0) {
                 const angle = Math.atan2(dy, dx);
                 const octant = Math.round(8 * angle / (2 * Math.PI) + 8) % 8;
@@ -980,12 +849,10 @@ export default class Game {
             }
 
             if (isRanged) {
-                // Ranged: Fire at specific coordinates
                 const mag = Math.sqrt(dx*dx + dy*dy);
                 const vx = mag === 0 ? pos.facing.x : dx/mag;
                 const vy = mag === 0 ? pos.facing.y : dy/mag;
 
-                // Use ID from intent if provided (prediction), else generate
                 const projId = intent.projId || `proj_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
                 const proj = { 
@@ -1003,7 +870,6 @@ export default class Game {
                 this.audioSystem.play('attack', pos.x, pos.y);
                 this.renderSystem.triggerAttack(entityId);
             } else {
-                // Melee: Attack adjacent tile in facing direction
                 const adjX = pos.x + pos.facing.x;
                 const adjY = pos.y + pos.facing.y;
                 const adjId = this.gridSystem.getEntityAt(adjX, adjY);
@@ -1011,7 +877,6 @@ export default class Game {
                 if (adjId) {
                     this.performAttack(entityId, adjId);
                 } else {
-                    // Whiff
                     this.renderSystem.triggerAttack(entityId);
                     this.renderSystem.addEffect(adjX, adjY, 'slash');
                     this.peerClient.send({ type: 'EFFECT', payload: { x: adjX, y: adjY, type: 'slash' } });
@@ -1020,7 +885,6 @@ export default class Game {
             }
         }
 
-        // Legacy Attack Intent (if triggered by other means)
         if (intent.type === 'ATTACK') {
             const attacker = this.gridSystem.entities.get(entityId);
             if (attacker) {
@@ -1029,15 +893,13 @@ export default class Game {
                 const targetId = this.gridSystem.getEntityAt(targetX, targetY);
 
                 if (targetId) {
-                    // Friendly Fire Check for Monsters
                     const attackerStats = this.combatSystem.getStats(entityId);
                     const targetStats = this.combatSystem.getStats(targetId);
                     if (attackerStats && targetStats && attackerStats.team === 'monster' && targetStats.team === 'monster') {
-                        return; // Monsters cannot hurt monsters
+                        return;
                     }
                     this.performAttack(entityId, targetId);
                 } else {
-                    // Whiff (Attack air)
                     this.renderSystem.addEffect(targetX, targetY, 'slash');
                     this.peerClient.send({ type: 'EFFECT', payload: { x: targetX, y: targetY, type: 'slash' } });
                     this.audioSystem.play('swing', attacker.x, attacker.y);
@@ -1046,7 +908,6 @@ export default class Game {
         }
 
         if (intent.type === 'USE_ABILITY_SLOT') {
-            // Map slots 0-2 to quick1-3
             const quickSlot = `quick${intent.slot + 1}`;
             const effect = this.lootSystem.consumeItem(entityId, quickSlot);
             if (effect) {
@@ -1054,8 +915,6 @@ export default class Game {
                     const stats = this.combatSystem.getStats(entityId);
                     if (stats) {
                         stats.hp = Math.min(stats.maxHp, stats.hp + effect.value);
-                        // Emit damage event with negative amount to signal heal? Or just update HP.
-                        // Emit negative amount to trigger green floating text
                         this.combatSystem.emit('damage', { targetId: entityId, amount: -effect.value, sourceId: entityId, currentHp: stats.hp });
                         this.audioSystem.play('pickup', this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y);
                         this.uiSystem.renderInventory();
@@ -1065,15 +924,9 @@ export default class Game {
             }
         }
 
-        if (intent.type === 'USE_ITEM') { // Legacy
-            // ... existing logic merged above or kept for compatibility
-        }
-
-        // Legacy F key or mapped ability
         if (intent.type === 'ABILITY') {
             const result = this.combatSystem.useAbility(entityId);
             if (result) {
-                // Sync visual effects if needed
                 if (result.effect === 'stealth') {
                     const pos = this.gridSystem.entities.get(entityId);
                     if (pos) pos.invisible = true;
@@ -1087,13 +940,9 @@ export default class Game {
 
         if (intent.type === 'AUTO_EXPLORE') {
             if (entityId !== this.state.myId) return;
-            // Simple BFS to find nearest unexplored tile
-            // We need access to RenderSystem.explored
             const start = this.gridSystem.entities.get(entityId);
             if (!start) return;
 
-            // This is a heavy operation, usually done in a WebWorker or time-sliced.
-            // For this implementation, we'll do a limited BFS.
             const target = this.gridSystem.findNearestUnexplored(start.x, start.y, this.renderSystem.explored);
             if (target) {
                 const path = this.gridSystem.findPath(start.x, start.y, target.x, target.y);
@@ -1106,13 +955,11 @@ export default class Game {
         const targetPos = this.gridSystem.entities.get(targetId);
         if (!targetPos) return;
 
-        // Check for Ranged Weapon
         const equip = this.lootSystem.getEquipment(attackerId);
         const weaponId = equip.weapon;
         if (weaponId) {
             const config = this.lootSystem.getItemConfig(weaponId);
             if (config && config.range > 1) {
-                // Spawn Projectile
                 const attackerPos = this.gridSystem.entities.get(attackerId);
                 const dx = targetPos.x - attackerPos.x;
                 const dy = targetPos.y - attackerPos.y;
@@ -1136,19 +983,15 @@ export default class Game {
             }
         }
 
-        // Trigger Visual Animation
         this.renderSystem.triggerAttack(attackerId);
 
-        // Visual Feedback
         this.renderSystem.addEffect(targetPos.x, targetPos.y, 'slash');
         this.peerClient.send({ type: 'EFFECT', payload: { x: targetPos.x, y: targetPos.y, type: 'slash' } });
         
-        // Audio
         this.audioSystem.play('attack', attackerId === this.state.myId ? this.gridSystem.entities.get(attackerId).x : targetPos.x, targetPos.y);
 
         const stats = this.combatSystem.getStats(attackerId);
         let damage = stats ? stats.damage : 5;
-        // Crit Logic (15% Chance)
         const isCrit = Math.random() < 0.15;
         if (isCrit) damage = Math.floor(damage * 1.5);
 
@@ -1157,28 +1000,24 @@ export default class Game {
 
     handleExtraction(entityId) {
         console.log(`Processing extraction for ${entityId}`);
-        // 1. Save Data
         const stats = this.combatSystem.getStats(entityId);
         const name = stats ? (stats.name || 'Unknown') : 'Unknown';
         if (entityId === this.state.myId) {
-            this.playerData.gold += 100; // Flat reward for now
+            this.playerData.gold += 100;
             this.state.isExtracting = true;
             this.playerData.extractions = (this.playerData.extractions || 0) + 1;
             this.database.savePlayer({ gold: this.playerData.gold, extractions: this.playerData.extractions });
             this.uiSystem.updateGoldUI();
         }
         
-        // 2. Remove from World
         this.gridSystem.removeEntity(entityId);
         this.combatSystem.stats.delete(entityId);
 
-        // 3. Notify
         if (this.state.isHost) {
             this.peerClient.send({ type: 'PLAYER_EXTRACTED', payload: { id: entityId } });
 
             this.checkGameOver();
             
-            // Respawn as Monster
             setTimeout(() => {
                 this.respawnAsMonster(entityId);
             }, 3000);
@@ -1207,11 +1046,9 @@ export default class Game {
     }
 
     update(dt) {
-        // Cap dt to prevent physics tunneling or spirals of death on lag spikes
         if (dt > 100) dt = 100;
 
         if (this.state.isHost) {
-            // Timer Logic
             this.state.gameTime -= (dt / 1000);
             
             if (!this.state.extractionOpen && this.state.gameTime <= 60) {
@@ -1225,7 +1062,6 @@ export default class Game {
                 this.uiSystem.showGameOver("Time Expired");
             }
 
-            // Network Tick: Send Snapshot (10Hz)
             this.state.netTimer += dt;
             if (this.state.netTimer >= 100) {
                 this.state.netTimer = 0;
@@ -1237,28 +1073,22 @@ export default class Game {
             }
         }
 
-        // Lava Damage Logic (Host Authoritative)
         this.state.lavaTimer += dt;
         if (this.state.lavaTimer >= 1000) {
             this.state.lavaTimer = 0;
             for (const [id, pos] of this.gridSystem.entities) {
-                if (this.gridSystem.grid[pos.y][pos.x] === 4) { // Lava
-                    // Apply 20 damage per second
+                if (this.gridSystem.grid[pos.y][pos.x] === 4) {
                     this.combatSystem.applyDamage(id, 20, null);
                 }
             }
         }
 
-        // Client Reconciliation: Check for drift
         if (!this.state.isHost && this.state.connected) {
-            // 1. Get Latest Server State
             const latestState = this.syncManager.getLatestState();
             
             if (latestState) {
-                // 2. Sync Logic Layer (Collisions & Targeting)
                 this.gridSystem.syncRemoteEntities(latestState.entities, this.state.myId);
                 
-                // Sync Loot for collision logic
                 this.lootSystem.syncLoot(latestState.loot);
                 
                 for (const [id, data] of latestState.entities) {
@@ -1267,31 +1097,22 @@ export default class Game {
                     }
                 }
 
-                // Sync Projectiles & Game Time
                 this.state.projectiles = latestState.projectiles;
                 this.state.gameTime = latestState.gameTime;
 
-                // 3. Reconcile Self (Drift Correction)
                 const serverPos = latestState.entities.get(this.state.myId);
                 const localPos = this.gridSystem.entities.get(this.state.myId);
             
                 if (serverPos) {
-                // Prevent re-adding human entity if we are in the process of extracting locally
-                // until the server confirms we are a monster.
                 if (this.state.isExtracting && serverPos.team !== 'monster') {
                     return;
                 }
-                // If we are now a monster on server, clear extraction flag
                 if (serverPos.team === 'monster') this.state.isExtracting = false;
 
                 if (!localPos) {
-                    // Respawned on server, add locally
-                    // Round to integer to prevent float contamination from interpolation
                     this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
                 } else {
                     const dist = Math.abs(serverPos.x - localPos.x) + Math.abs(serverPos.y - localPos.y);
-                    // If drift is too large (e.g. rejected move or lag spike), snap to server
-                    // Increased threshold to 5.0 to prevent snapping during rapid/diagonal movement
                     if (dist > 5.0) {
                         console.warn("Reconciling position. Dist:", dist);
                         this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
@@ -1301,7 +1122,6 @@ export default class Game {
             }
         }
 
-        // Common UI Updates (Timer)
         const timerEl = document.getElementById('game-timer');
         if (timerEl) {
             const minutes = Math.floor(this.state.gameTime / 60);
@@ -1311,16 +1131,14 @@ export default class Game {
             else timerEl.style.color = '#fff';
         }
 
-        // Update Projectiles (Host Only Simulation)
         if (this.state.isHost) {
             const projSpeed = dt / 1000;
             
             for (let i = this.state.projectiles.length - 1; i >= 0; i--) {
                 const p = this.state.projectiles[i];
                 
-                // Sub-step physics to prevent tunneling through walls at high speeds or low framerates
                 const totalMove = p.speed * projSpeed;
-                const steps = Math.ceil(totalMove / 0.5); // Ensure we don't move more than 0.5 tiles per check
+                const steps = Math.ceil(totalMove / 0.5);
                 const stepMove = totalMove / steps;
                 
                 let hit = false;
@@ -1332,7 +1150,7 @@ export default class Game {
                     const gridY = Math.round(p.y);
 
                     if (!this.gridSystem.isWalkable(gridX, gridY)) {
-                        this.state.projectiles.splice(i, 1); // Hit Wall
+                        this.state.projectiles.splice(i, 1);
                         hit = true;
                         break;
                     }
@@ -1348,7 +1166,6 @@ export default class Game {
             }
         }
 
-        // Update Interaction
         if (this.state.interaction) {
             if (Date.now() - this.state.interaction.startTime >= this.state.interaction.duration) {
                 this.handleInteractWithLoot(this.state.interaction.target);
@@ -1356,14 +1173,11 @@ export default class Game {
             }
         }
 
-        // Poll Input (Solves OS key repeat delay)
         if (this.state.myId) {
             const mouse = this.inputManager.getMouseState();
             
-            // Continuous Movement/Action (Left Click Hold)
             if (mouse.left) {
                 const now = Date.now();
-                // Throttle pathfinding to every 100ms to prevent performance tanking
                 if (!this.state.lastMousePathTime || now - this.state.lastMousePathTime > 100) {
                     this.state.lastMousePathTime = now;
                     
@@ -1380,30 +1194,25 @@ export default class Game {
             const moveIntent = this.inputManager.getMovementIntent();
             const attackIntent = this.inputManager.getAttackIntent();
             
-            // Auto-Explore / Path Following
             if (this.state.autoPath && this.state.autoPath.length > 0 && !moveIntent) {
                 const next = this.state.autoPath[0];
                 const pos = this.gridSystem.entities.get(this.state.myId);
                 if (pos) {
                     const dx = next.x - pos.x;
                     const dy = next.y - pos.y;
-                    // If we are at the node (or close enough), pop it
                     if (dx === 0 && dy === 0) {
                         this.state.autoPath.shift();
                     } else {
-                        // Generate move intent
                         this.handleInput({ type: 'MOVE', direction: { x: Math.sign(dx), y: Math.sign(dy) } });
                     }
                 }
             } else if (this.state.chaseTargetId && !moveIntent) {
-                // Path finished, check if we can attack
                 const targetPos = this.gridSystem.entities.get(this.state.chaseTargetId);
                 const myPos = this.gridSystem.entities.get(this.state.myId);
                 
                 if (targetPos && myPos) {
                     const dist = Math.max(Math.abs(targetPos.x - myPos.x), Math.abs(targetPos.y - myPos.y));
                     if (dist <= 1) {
-                        // Perform Attack
                         this.handleInput({ 
                             type: 'TARGET_ACTION', 
                             x: targetPos.x, 
@@ -1413,7 +1222,6 @@ export default class Game {
                 }
                 this.state.chaseTargetId = null;
             } else if (moveIntent) {
-                // Manual input cancels auto-path
                 this.state.autoPath = [];
                 this.state.chaseTargetId = null;
             }
@@ -1421,7 +1229,6 @@ export default class Game {
             if (moveIntent) {
                 this.handleInput(moveIntent);
             } else {
-                // Clear move buffer if key released to prevent double-tap effect
                 if (this.state.actionBuffer && this.state.actionBuffer.type === 'MOVE') {
                     this.state.actionBuffer = null;
                 }
@@ -1440,7 +1247,6 @@ export default class Game {
     render(alpha) {
         if (!this.state.myId) return;
         
-        // Update Audio Listener
         const myPos = this.gridSystem.entities.get(this.state.myId);
         if (myPos) {
             this.audioSystem.updateListener(myPos.x, myPos.y);
@@ -1454,56 +1260,5 @@ export default class Game {
             this.state.interaction,
             this.state.myId
         );
-    }
-}
-export class GameLoop {
-    constructor(updateFn, renderFn, tickRate = 20) {
-        this.updateFn = updateFn;
-        this.renderFn = renderFn;
-        this.tickRate = tickRate;
-        this.timePerTick = 1000 / tickRate;
-        if (!Number.isFinite(this.timePerTick) || this.timePerTick < 1) this.timePerTick = 50; // Safety fallback
-        this.lastTime = 0;
-        this.accumulator = 0;
-        this.isRunning = false;
-        this.animationFrameId = null;
-    }
-
-    start() {
-        if (this.isRunning) return;
-        this.isRunning = true;
-        this.lastTime = performance.now();
-        this.loop(this.lastTime);
-    }
-
-    stop() {
-        this.isRunning = false;
-        cancelAnimationFrame(this.animationFrameId);
-    }
-
-    loop(timestamp) {
-        if (!this.isRunning) return;
-
-        let deltaTime = timestamp - this.lastTime;
-        // Cap deltaTime to prevent spiral of death if tab is backgrounded
-        if (deltaTime > 1000) deltaTime = 1000;
-        
-        this.lastTime = timestamp;
-        this.accumulator += deltaTime;
-
-        let updates = 0;
-        try {
-            while (this.accumulator >= this.timePerTick) {
-                this.updateFn(this.timePerTick); // Fixed update
-                this.accumulator -= this.timePerTick;
-                if (++updates > 10) { this.accumulator = 0; break; } // Safety break: prevent spiral of death
-            }
-
-            this.renderFn(this.accumulator / this.timePerTick); // Interpolation alpha
-        } catch (e) {
-            console.error("GameLoop Crash Recovered:", e);
-        }
-
-        this.animationFrameId = requestAnimationFrame((t) => this.loop(t));
     }
 }

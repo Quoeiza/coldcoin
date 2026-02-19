@@ -4,6 +4,11 @@ export class InventoryUI {
         this.handleEquipItem = null;
     }
 
+    init() {
+        this._setupSlotDrop(document.getElementById('slot-weapon'), 'weapon');
+        this._setupSlotDrop(document.getElementById('slot-armor'), 'armor');
+    }
+
     setCallbacks(handleEquipItem) {
         this.handleEquipItem = handleEquipItem;
     }
