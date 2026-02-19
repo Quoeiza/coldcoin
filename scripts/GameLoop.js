@@ -339,6 +339,9 @@ export default class GameLoop {
                         const hpEl = document.getElementById('hp-val');
                         if (hpEl) hpEl.innerText = Math.max(0, data.payload.hp);
                         this.audioSystem.play('hit');
+                        
+                        const stats = this.combatSystem.getStats(this.state.myId);
+                        if (stats) stats.hp = data.payload.hp;
                     }
                 } else if (data.type === 'ENTITY_DEATH') {
                     this.gridSystem.removeEntity(data.payload.id);
@@ -355,6 +358,11 @@ export default class GameLoop {
                 } else if (data.type === 'RESPAWN_MONSTER') {
                     if (data.payload.id === this.state.myId) {
                         this.uiSystem.showNotification(`Respawned as ${data.payload.type}`);
+                        const stats = this.combatSystem.getStats(this.state.myId);
+                        if (stats) {
+                            stats.type = data.payload.type;
+                            stats.team = 'monster';
+                        }
                     }
                 } else if (data.type === 'EFFECT') {
                     this.renderSystem.addEffect(data.payload.x, data.payload.y, data.payload.type);
@@ -616,7 +624,10 @@ export default class GameLoop {
                 }
             } else if (result.type === 'BUMP_WALL') {
                 this.renderSystem.triggerBump(entityId, result.direction);
-                if (entityId === this.state.myId) this.audioSystem.play('bump', pos.x, pos.y);
+                if (entityId === this.state.myId) {
+                    this.audioSystem.play('bump', pos.x, pos.y);
+                    this.state.autoPath = [];
+                }
             }
         }
         
@@ -848,6 +859,24 @@ export default class GameLoop {
                 for (const [id, data] of latestState.entities) {
                     if (id !== this.state.myId) {
                         this.combatSystem.syncRemoteStats(id, data);
+                    } else {
+                        const stats = this.combatSystem.getStats(id);
+                        if (stats) {
+                            stats.hp = data.hp;
+                            stats.maxHp = data.maxHp;
+                            stats.type = data.type;
+                            stats.team = data.team;
+                            stats.invisible = data.invisible;
+                        } else {
+                            this.combatSystem.registerEntity(id, data.type || 'player', true, this.playerData.class, this.playerData.name);
+                            const newStats = this.combatSystem.getStats(id);
+                            if (newStats) {
+                                newStats.hp = data.hp;
+                                newStats.maxHp = data.maxHp;
+                                newStats.type = data.type;
+                                newStats.team = data.team;
+                            }
+                        }
                     }
                 }
 

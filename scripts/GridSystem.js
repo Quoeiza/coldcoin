@@ -380,6 +380,9 @@ export default class GridSystem {
                 entity.y = data.y;
                 entity.facing = data.facing || entity.facing;
                 entity.invisible = data.invisible;
+                entity.type = data.type;
+                entity.hp = data.hp;
+                entity.maxHp = data.maxHp;
                 
                 this.entities.set(id, entity);
                 this.spatialMap.set(this.getKey(data.x, data.y), id);

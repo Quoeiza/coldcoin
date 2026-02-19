@@ -12,7 +12,7 @@ export default class RenderSystem {
         this.canvas.height = window.innerHeight;
         this.ctx.imageSmoothingEnabled = false;
         this.tileSize = tileSize || 48; // Match tile manager config
-        this.scale = 2;
+        this.scale = (window.innerWidth < 800) ? 1 : 2;
         this.lightRadius = 300;
 
         // Lighting Layer
