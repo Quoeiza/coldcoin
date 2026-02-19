@@ -10,8 +10,7 @@ import SyncManager from './network/SyncManager.js';
 import AudioSystem from './systems/AudioSystem.js';
 import Database from './services/Database.js';
 import UISystem from './systems/UISystem.js';
-
-const AI_DIRS = [{x:0, y:1}, {x:0, y:-1}, {x:1, y:0}, {x:-1, y:0}];
+import AISystem from './systems/AISystem.js';
 
 class Game {
     constructor() {
@@ -82,6 +81,7 @@ class Game {
         this.audioSystem = new AudioSystem();
         this.audioSystem.setAssetLoader(this.assetSystem);
         this.uiSystem = new UISystem(this);
+        this.aiSystem = new AISystem(this.gridSystem, this.combatSystem, this.lootSystem);
 
         // 3. Show Lobby
         this.uiSystem.setupLobby();
@@ -1246,135 +1246,6 @@ class Game {
         return null;
     }
 
-    updateAI(dt) {
-        const now = Date.now();
-        for (const [id, stats] of this.combatSystem.stats) {
-            if (stats.isPlayer) continue;
-            
-            // AI Logic: 1 second cooldown
-            if (now - (stats.lastActionTime || 0) < 1000) continue;
-
-            const pos = this.gridSystem.entities.get(id);
-            if (!pos) continue;
-
-            // Optimization: AI Sleep
-            // If the monster is too far from any player, skip logic.
-            // This drastically reduces CPU usage on large maps with many monsters.
-            const nearestPlayerId = this.findNearestPlayerId(pos.x, pos.y);
-            if (!nearestPlayerId) continue;
-            
-            const nearestPlayer = this.gridSystem.entities.get(nearestPlayerId);
-            const distToPlayer = Math.abs(nearestPlayer.x - pos.x) + Math.abs(nearestPlayer.y - pos.y);
-            if (distToPlayer > 25) continue; // Sleep radius (approx 1.5 screens)
-
-            // Check collision with chests for AI
-            // Simple check: if target is blocked by chest, don't move there
-            // This is handled implicitly if moveEntity checks collision, but moveEntity only checks walls/entities.
-            // We need to check loot collision here or inject it into moveEntity.
-            // For now, we check here before moving.
-            // (Logic below handles movement)
-            
-            let targetPos = null;
-            let shouldAttack = false;
-
-            if (nearestPlayer) {
-                // Check Line of Sight
-                const hasLOS = this.gridSystem.hasLineOfSight(pos.x, pos.y, nearestPlayer.x, nearestPlayer.y);
-                
-                if (hasLOS) {
-                    stats.aiState = 'CHASING';
-                    stats.targetLastPos = { x: nearestPlayer.x, y: nearestPlayer.y };
-                    stats.memoryTimer = 5000; // 5 Seconds Memory
-                    targetPos = nearestPlayer;
-                    shouldAttack = true;
-                }
-            } else if (stats.aiState === 'IDLE') {
-                // Roaming Logic
-                if (Math.random() < 0.02) { // 2% chance per tick to move
-                    const dir = AI_DIRS[Math.floor(Math.random() * AI_DIRS.length)];
-                    if (!this.lootSystem.isCollidable(pos.x + dir.x, pos.y + dir.y)) {
-                        this.gridSystem.moveEntity(id, dir.x, dir.y);
-                        stats.lastActionTime = now;
-                    }
-                }
-            }
-
-            // Persistence Logic
-            if (!targetPos && stats.aiState === 'CHASING' && stats.targetLastPos) {
-                stats.memoryTimer -= dt;
-                if (stats.memoryTimer > 0) {
-                    targetPos = stats.targetLastPos;
-                } else {
-                    stats.aiState = 'IDLE';
-                    stats.targetLastPos = null;
-                }
-            }
-
-            if (targetPos) {
-                const dx = targetPos.x - pos.x;
-                const dy = targetPos.y - pos.y;
-                const dist = Math.max(Math.abs(dx), Math.abs(dy));
-
-                if (shouldAttack && dist <= 1) {
-                    // Update facing to look at target
-                    pos.facing = { x: Math.sign(dx), y: Math.sign(dy) };
-                    // Attack (Only if we have actual target/LOS)
-                    this.performAttack(id, nearestPlayerId);
-                    stats.lastActionTime = now;
-                } else {
-                    // Move towards player (Simple Axis-Aligned)
-                    let moveX = Math.sign(dx);
-                    let moveY = Math.sign(dy);
-                    
-                    // Try move
-                    // Check Loot Collision first
-                    if (!this.lootSystem.isCollidable(pos.x + moveX, pos.y + moveY)) {
-                        let result = this.gridSystem.moveEntity(id, moveX, moveY);
-                        
-                        // If blocked, try the other axis
-                        if (!result.success) {
-                            // Fallback to cardinal movement if diagonal/direct failed
-                            let fallbackX = 0;
-                            let fallbackY = 0;
-
-                            // Try moving along X axis only
-                            if (moveX !== 0 && this.gridSystem.moveEntity(id, moveX, 0).success) return;
-                            // Try moving along Y axis only
-                            if (moveY !== 0 && this.gridSystem.moveEntity(id, 0, moveY).success) return;
-                            
-                            // Original fallback logic (simplified above, but keeping structure if needed)
-                            if (fallbackX !== 0 || fallbackY !== 0) {
-                                if (!this.lootSystem.isCollidable(pos.x + moveX, pos.y + moveY)) {
-                                    this.gridSystem.moveEntity(id, moveX, moveY);
-                                }
-                            }
-                        }
-                    }
-                    stats.lastActionTime = now;
-                }
-            }
-        }
-    }
-
-    findNearestPlayerId(x, y) {
-        let nearestId = null;
-        let minDist = Infinity;
-        
-        for (const [id, stats] of this.combatSystem.stats) {
-            if (stats.team === 'player') {
-                const pos = this.gridSystem.entities.get(id);
-                if (pos) {
-                    const dist = Math.abs(pos.x - x) + Math.abs(pos.y - y);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        nearestId = id;
-                    }
-                }
-            }
-        }
-        return nearestId;
-    }
-
     update(dt) {
         // Cap dt to prevent physics tunneling or spirals of death on lag spikes
         if (dt > 100) dt = 100;
@@ -1602,7 +1473,7 @@ class Game {
         }
 
         if (this.state.isHost) {
-            this.updateAI(dt);
+            this.aiSystem.update(dt, (attackerId, targetId) => this.performAttack(attackerId, targetId));
         }
     }
 
