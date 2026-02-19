@@ -31,7 +31,7 @@ body, html {
 }
 
 h1, h2, h3, button, .header-font {
-    font-family: 'Bokor', serif;
+    font-family: 'Cinzel', serif;
 }
 
 /* LAYOUT & CORE ELEMENTS */
@@ -222,7 +222,7 @@ input, select {
     left: 50%;
     transform: translateX(-50%);
     font-size: 24px;
-    font-family: 'Bokor', serif;
+    font-family: 'Cinzel', serif;
     font-weight: bold;
     text-shadow: 2px 2px 0 #000;
     background: rgba(0,0,0,0.6);
@@ -235,7 +235,7 @@ input, select {
     position: absolute;
     top: 20px;
     right: 20px;
-    font-family: 'Bokor', serif;
+    font-family: 'Cinzel', serif;
     color: var(--text-light);
     padding: 5px 10px;
     background: transparent !important;
@@ -248,7 +248,7 @@ input, select {
     display: flex;
     flex-direction: column;
     gap: 5px;
-    font-family: 'Bokor', serif;
+    font-family: 'Cinzel', serif;
     text-shadow: 1px 1px 0 #000;
 }
 
@@ -267,7 +267,7 @@ input, select {
     top: 100px;
     left: 50%;
     transform: translateX(-50%);
-    font-family: 'Bokor', serif;
+    font-family: 'Cinzel', serif;
     color: var(--gold);
     font-size: 20px;
     text-shadow: 1px 1px 0 #000;
