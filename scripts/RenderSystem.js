@@ -1084,8 +1084,11 @@ export default class RenderSystem {
             }
         };
 
-        // Casters are now ALL walls, including front faces.
-        const isCaster = (x, y) => this.tileMapSystem.getTileVal(grid, x, y) === 1;
+        // Casters are walls that are NOT walkable (colliding).
+        const isCaster = (x, y) => {
+            return this.tileMapSystem.getTileVal(grid, x, y) === 1 && 
+                   (!this.gridSystem || !this.gridSystem.isWalkable(x, y));
+        };
         
         this.shadowCasters.length = 0;
         mesh(this.shadowCasters, isCaster);
@@ -1101,6 +1104,20 @@ export default class RenderSystem {
             this.drawShadowVolume(sCtx, wall.x, wall.y, wall.w, wall.h, px, py, radius, lOffX, lOffY);
         }
         sCtx.filter = 'none';
+
+        // Make Void tiles appear in shadow
+        sCtx.globalCompositeOperation = 'source-over';
+        sCtx.fillStyle = '#FFFFFF';
+        
+        for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+                if (this.tileMapSystem.shouldDrawVoid(grid, x, y)) {
+                    const tx = (x * ts) - camX;
+                    const ty = (y * ts) - camY;
+                    sCtx.fillRect(tx, ty, ts, ts);
+                }
+            }
+        }
 
         // Mask out Wall Faces so they don't cast shadows on themselves or neighbors
         sCtx.globalCompositeOperation = 'destination-out';
