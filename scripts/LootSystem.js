@@ -61,9 +61,17 @@ export default class LootSystem {
         return items;
     }
 
-    createLootBag(x, y, items) {
-        if (!items) return;
-        items.forEach(item => this.spawnDrop(x, y, item.itemId, item.count));
+    createLootBag(x, y, items, gold = 0) {
+        if ((!items || items.length === 0) && gold <= 0) return;
+        
+        if (items && items.length > 0) {
+            items.forEach((item, index) => {
+                const itemGold = (index === 0) ? gold : 0;
+                this.spawnLoot(x, y, item.itemId, item.count, 'bag', itemGold);
+            });
+        } else if (gold > 0) {
+            this.spawnLoot(x, y, 'gold', 1, 'bag', gold);
+        }
     }
 
     getLootAt(x, y) {

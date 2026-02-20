@@ -746,7 +746,7 @@ export default class GridSystem {
         return result;
     }
 
-    resolveMoveIntent(entityId, direction, lootSystem) {
+    resolveMoveIntent(entityId, direction, lootSystem, ignoreLoot = false) {
         const pos = this.entities.get(entityId);
         if (!pos) return { type: 'NONE' };
 
@@ -754,7 +754,7 @@ export default class GridSystem {
         const ty = pos.y + direction.y;
 
         // 1. Check Loot Collision (Chests)
-        if (lootSystem.isCollidable(tx, ty)) {
+        if (!ignoreLoot && lootSystem.isCollidable(tx, ty)) {
             const items = lootSystem.getItemsAt(tx, ty);
             const chest = items.find(l => l.type === 'chest' && !l.opened);
             if (chest) {

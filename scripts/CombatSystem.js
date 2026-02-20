@@ -40,7 +40,8 @@ export default class CombatSystem extends EventEmitter {
             invisible: false,
             damageBuff: 0,
             name: name || type,
-            attributes: { str: 10, agi: 10, will: 10 }
+            attributes: { str: 10, agi: 10, will: 10 },
+            gold: 0
         };
         
         if (this.enemiesConfig[type]) {

@@ -155,7 +155,7 @@ export default class GameLoop {
                 document.getElementById('room-code-display').innerText = `Room: ${displayId}`;
             } else if (hostId) {
                 document.getElementById('room-code-display').innerText = `Room: ${hostId}`;
-                this.peerClient.connect(`coldcoin-${hostId}`, { name: this.playerData.name, class: this.playerData.class });
+                this.peerClient.connect(`coldcoin-${hostId}`, { name: this.playerData.name, class: this.playerData.class, gold: this.playerData.gold });
             }
         });
     }
@@ -204,6 +204,10 @@ export default class GameLoop {
                     this.playerData.gold += result.gold;
                     this.uiSystem.updateGoldUI();
                     this.uiSystem.renderInventory();
+                    if (this.state.isHost) {
+                        const stats = this.combatSystem.getStats(entityId);
+                        if (stats) stats.gold = (stats.gold || 0) + result.gold;
+                    }
                 } else if (this.state.isHost) {
                     this.peerClient.send({ type: 'UPDATE_GOLD', payload: { id: entityId, amount: result.gold } });
                 }
@@ -243,6 +247,25 @@ export default class GameLoop {
                 if (hpEl) hpEl.innerText = Math.max(0, currentHp);
                 this.renderSystem.triggerShake(5, 200);
                 this.audioSystem.play('hit', this.gridSystem.entities.get(targetId).x, this.gridSystem.entities.get(targetId).y);
+            }
+
+            if (this.state.isHost && sourceId && amount > 0) {
+                const sourceStats = this.combatSystem.getStats(sourceId);
+                const targetStats = this.combatSystem.getStats(targetId);
+                if (sourceStats && sourceStats.isPlayer && sourceStats.team === 'monster' && targetStats && targetStats.team === 'player') {
+                    const goldReward = Math.floor(amount / 10);
+                    if (goldReward > 0) {
+                        sourceStats.gold = (sourceStats.gold || 0) + goldReward;
+                        if (sourceId === this.state.myId) {
+                            this.playerData.gold = (this.playerData.gold || 0) + goldReward;
+                            this.database.updatePlayer({ gold: this.playerData.gold });
+                            this.uiSystem.updateGoldUI();
+                            this.uiSystem.showNotification(`+${goldReward}g (Damage)`);
+                        } else {
+                            this.peerClient.send({ type: 'UPDATE_GOLD', payload: { id: sourceId, amount: goldReward } });
+                        }
+                    }
+                }
             }
 
             const pos = this.gridSystem.entities.get(targetId);
@@ -295,8 +318,20 @@ export default class GameLoop {
                     if (kPos) { dropX = kPos.x; dropY = kPos.y; }
                 }
 
+                let goldToDrop = 0;
+                if (stats && stats.isPlayer) {
+                    goldToDrop = stats.gold || 0;
+                    stats.gold = 0;
+                    if (entityId === this.state.myId) {
+                        goldToDrop = this.playerData.gold;
+                        this.playerData.gold = 0;
+                        this.database.updatePlayer({ gold: 0 });
+                        this.uiSystem.updateGoldUI();
+                    }
+                }
+
                 const items = this.lootSystem.getAllItems(entityId);
-                this.lootSystem.createLootBag(dropX, dropY, items);
+                this.lootSystem.createLootBag(dropX, dropY, items, goldToDrop);
                 
                 if (stats && stats.isPlayer) {
                     setTimeout(() => {
@@ -423,6 +458,8 @@ export default class GameLoop {
                 const spawn = this.gridSystem.getSpawnPoint(true);
                 this.gridSystem.addEntity(peerId, spawn.x, spawn.y);
                 this.combatSystem.registerEntity(peerId, 'player', true, metadata.class || 'Fighter', metadata.name || 'Unknown');
+                const stats = this.combatSystem.getStats(peerId);
+                if (stats) stats.gold = metadata.gold || 0;
             } else {
                 this.state.handshakeInterval = setInterval(() => {
                     if (!this.state.connected) this.peerClient.send({ type: 'HELLO' });
@@ -442,6 +479,8 @@ export default class GameLoop {
         const spawn = this.gridSystem.getSpawnPoint(true);
         this.gridSystem.addEntity(id, spawn.x, spawn.y);
         this.combatSystem.registerEntity(id, 'player', true, this.playerData.class, this.playerData.name);
+        const stats = this.combatSystem.getStats(id);
+        if (stats) stats.gold = this.playerData.gold;
         this.state.gameTime = this.config.global.escapeTimeSeconds || 600;
     }
 
@@ -620,7 +659,8 @@ export default class GameLoop {
                 }
             }
 
-            const result = this.gridSystem.resolveMoveIntent(entityId, intent.direction, this.lootSystem);
+            const isMonster = stats && stats.team === 'monster';
+            const result = this.gridSystem.resolveMoveIntent(entityId, intent.direction, this.lootSystem, isMonster);
 
             if (result.type === 'INTERACT_LOOT') {
                 if (pos) pos.facing = result.facing;
@@ -657,6 +697,8 @@ export default class GameLoop {
                     this.performAttack(entityId, targetId);
                     return;
                 }
+
+                if (stats && stats.team === 'monster') return;
 
                 const items = this.lootSystem.getItemsAt(tx, ty);
                 if (items.length > 0) {
