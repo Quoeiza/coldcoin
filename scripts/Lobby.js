@@ -37,6 +37,12 @@ export function setupLobby(uiLayer, playerData, onHost, onJoin) {
     `;
     uiLayer.appendChild(lobby);
 
+    const bgVideo = document.getElementById('lobby-bg-video');
+    if (bgVideo) {
+        bgVideo.muted = true;
+        bgVideo.play().catch(e => console.warn("Lobby video autoplay failed:", e));
+    }
+
     const codeInput = document.getElementById('room-code-input');
     codeInput.maxLength = 4;
     codeInput.addEventListener('input', (e) => {
