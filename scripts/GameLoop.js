@@ -20,6 +20,7 @@ const NetworkEvents = {
     EQUIP_ITEM: 'EQUIP_ITEM',
     UNEQUIP_ITEM: 'UNEQUIP_ITEM',
     DROP_ITEM: 'DROP_ITEM',
+    CLIENT_EFFECT: 'CLIENT_EFFECT',
 
     // Host to Client
     DISCOVERY_RESPONSE: 'DISCOVERY_RESPONSE',
@@ -382,22 +383,22 @@ export default class GameLoop {
                 }
             }
 
-            const pos = this.gridSystem.entities.get(targetId);
-            if (pos) {
-                const color = amount > 0 ? '#ff4444' : '#44ff44';
-                let text = Math.abs(amount).toString();
-                if (options && options.isCrit) text += "!";
-                this.renderSystem.addFloatingText(pos.x, pos.y, text, color);
-                
-                if (this.state.isHost) {
-                    this.peerClient.send({ type: NetworkEvents.FLOAT_TEXT, payload: { x: pos.x, y: pos.y, text, color } });
-                }
-            }
-
+            // Locally trigger effects for the host/local player
+            this.renderSystem.addFloatingText(this.gridSystem.entities.get(targetId), amount, options);
             this.renderSystem.triggerDamage(targetId, sourceId);
 
             if (this.state.isHost) {
-                this.peerClient.send({ type: NetworkEvents.UPDATE_HP, payload: { id: targetId, hp: currentHp } });
+                // Send a single, rich event to clients
+                this.peerClient.send({ 
+                    type: NetworkEvents.UPDATE_HP, 
+                    payload: { 
+                        id: targetId, 
+                        hp: currentHp,
+                        sourceId: sourceId,
+                        amount: amount,
+                        options: options
+                    } 
+                });
             }
         });
 
@@ -510,14 +511,30 @@ export default class GameLoop {
                     }
                     this.state.connected = true;
                 } else if (data.type === NetworkEvents.UPDATE_HP) {
-                    if (data.payload.id === this.state.myId) {
+                    const { id, hp, sourceId, amount, options } = data.payload;
+
+                    // Update stats model
+                    const stats = this.combatSystem.getStats(id);
+                    if (stats) stats.hp = hp;
+                    
+                    // Trigger local screen effects if the message is about us
+                    if (id === this.state.myId) {
                         const hpEl = document.getElementById('hp-val');
-                        if (hpEl) hpEl.innerText = Math.max(0, data.payload.hp);
+                        if (hpEl) hpEl.innerText = Math.max(0, hp);
                         this.audioSystem.play('hit');
-                        
-                        const stats = this.combatSystem.getStats(this.state.myId);
-                        if (stats) stats.hp = data.payload.hp;
+                        this.renderSystem.triggerShake(5, 200);
                     }
+
+                    // Trigger world-space visual effects for the damaged entity
+                    const pos = this.gridSystem.entities.get(id);
+                    if (pos) {
+                        const color = amount > 0 ? '#ff4444' : '#44ff44';
+                        let text = Math.abs(amount).toString();
+                        if (options && options.isCrit) text += "!";
+                        this.renderSystem.addFloatingText(pos.x, pos.y, text, color);
+                    }
+                    this.renderSystem.triggerDamage(id, sourceId);
+
                 } else if (data.type === NetworkEvents.ENTITY_DEATH) {
                     this.gridSystem.removeEntity(data.payload.id);
                     this.renderSystem.triggerDeath(data.payload.id);
@@ -530,23 +547,28 @@ export default class GameLoop {
                     this.gridSystem.setTile(data.payload.x, data.payload.y, 9);
                     this.uiSystem.showNotification("The Escape Portal has opened!");
                     this.audioSystem.play('pickup', data.payload.x, data.payload.y);
-                } else if (data.type === NetworkEvents.RESPAWN_MONSTER) {
-                    if (data.payload.id === this.state.myId) {
-                        this.uiSystem.showNotification(`Respawned as ${data.payload.type}`);
-                        const stats = this.combatSystem.getStats(this.state.myId);
-                        if (stats) {
-                            stats.type = data.payload.type;
-                            stats.team = 'monster';
-                        }
+                                                } else if (data.type === NetworkEvents.RESPAWN_MONSTER) {
+                                                    if (data.payload.id === this.state.myId) {
+                                                        this.uiSystem.showNotification(`Respawned as ${data.payload.type}`);
+                                                        const stats = this.combatSystem.getStats(this.state.myId);
+                                                        if (stats) {
+                                                            stats.type = data.payload.type;
+                                                            stats.team = 'monster';
+                                                        }
+                                                    }
+                                                } else if (data.type === NetworkEvents.CLIENT_EFFECT) {                    const { name, x, y } = data.payload;
+                    const pos = this.gridSystem.entities.get(this.state.myId);
+                    
+                    if (name === 'miss') {
+                        this.renderSystem.triggerAttack(this.state.myId);
+                        this.renderSystem.addEffect(x, y, 'slash');
+                        if (pos) this.audioSystem.play('swing', pos.x, pos.y);
+                    } else if (name === 'miss_slash') {
+                        this.renderSystem.addEffect(x, y, 'slash');
+                        if (pos) this.audioSystem.play('swing', pos.x, pos.y);
                     }
-                } else if (data.type === NetworkEvents.EFFECT) {
-                    this.renderSystem.addEffect(data.payload.x, data.payload.y, data.payload.type);
                 }
 
-                if (data.type === NetworkEvents.FLOAT_TEXT) {
-                    this.renderSystem.addFloatingText(data.payload.x, data.payload.y, data.payload.text, data.payload.color);
-                }
-                
                 if (data.type === NetworkEvents.SPAWN_PROJECTILE) {
                     this.audioSystem.play('attack', data.payload.x, data.payload.y);
                 }
@@ -728,14 +750,11 @@ export default class GameLoop {
             // Host executes immediately
             this.processPlayerInput(this.state.myId, input);
         } else {
-            // Client predicts and sends to host
-            this.state.inputBuffer.push(input);
-
-            // Predict locally for responsiveness
-            if (intent.type === 'MOVE') {
-                this.processPlayerInput(this.state.myId, input);
-            }
+            // Client predicts its own actions immediately for responsiveness
+            this.processPlayerInput(this.state.myId, input);
             
+            // Then sends to host for validation.
+            this.state.inputBuffer.push(input);
             this.peerClient.send({ type: NetworkEvents.INPUT, payload: input });
         }
     }
@@ -780,9 +799,12 @@ export default class GameLoop {
                     if (targetId) {
                         this.performAttack(entityId, targetId);
                     } else {
-                        this.renderSystem.triggerAttack(entityId);
-                        this.renderSystem.addEffect(tx, ty, 'slash');
-                        this.peerClient.send({ type: NetworkEvents.EFFECT, payload: { x: tx, y: ty, type: 'slash' } });
+                        if (entityId === this.state.myId) {
+                            this.renderSystem.triggerAttack(entityId);
+                            this.renderSystem.addEffect(tx, ty, 'slash');
+                        } else {
+                            this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
+                        }
                         this.audioSystem.play('swing', pos.x, pos.y);
                     }
                 }
@@ -875,7 +897,9 @@ export default class GameLoop {
 
                 this.renderSystem.triggerAttack(entityId);
                 this.renderSystem.addEffect(tx, ty, 'slash');
-                this.peerClient.send({ type: NetworkEvents.EFFECT, payload: { x: tx, y: ty, type: 'slash' } });
+                if (entityId !== this.state.myId) {
+                     this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
+                }
                 this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
@@ -916,9 +940,12 @@ export default class GameLoop {
             } else if (result && result.type === 'MELEE') {
                 this.performAttack(entityId, result.targetId);
             } else if (result && result.type === 'MISS') {
-                this.renderSystem.triggerAttack(entityId);
-                this.renderSystem.addEffect(result.x, result.y, 'slash');
-                this.peerClient.send({ type: NetworkEvents.EFFECT, payload: { x: result.x, y: result.y, type: 'slash' } });
+                if (entityId === this.state.myId) {
+                    this.renderSystem.triggerAttack(entityId);
+                    this.renderSystem.addEffect(result.x, result.y, 'slash');
+                } else {
+                    this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: result.x, y: result.y }});
+                }
                 this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
@@ -933,8 +960,11 @@ export default class GameLoop {
                 }
                 this.performAttack(entityId, result.targetId);
             } else if (result && result.type === 'MISS') {
-                this.renderSystem.addEffect(result.x, result.y, 'slash');
-                this.peerClient.send({ type: NetworkEvents.EFFECT, payload: { x: result.x, y: result.y, type: 'slash' } });
+                if (entityId === this.state.myId) {
+                    this.renderSystem.addEffect(result.x, result.y, 'slash');
+                } else {
+                    this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss_slash', x: result.x, y: result.y }});
+                }
                 this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
@@ -996,11 +1026,12 @@ export default class GameLoop {
         if (result.type === 'MELEE') {
             this.renderSystem.triggerAttack(attackerId);
             this.renderSystem.addEffect(result.targetPos.x, result.targetPos.y, 'slash');
-            this.peerClient.send({ type: NetworkEvents.EFFECT, payload: { x: result.targetPos.x, y: result.targetPos.y, type: 'slash' } });
             
             this.audioSystem.play('attack', attackerId === this.state.myId ? result.attackerPos.x : result.targetPos.x, result.targetPos.y);
 
-            this.combatSystem.applyDamage(targetId, result.damage, attackerId, { isCrit: result.isCrit });
+            if (this.state.isHost) {
+                this.combatSystem.applyDamage(targetId, result.damage, attackerId, { isCrit: result.isCrit });
+            }
         }
     }
 
@@ -1088,16 +1119,16 @@ export default class GameLoop {
                     if (id !== this.state.myId) {
                         this.combatSystem.syncRemoteStats(id, data);
                     } else {
-                        // For our own player, we only take non-positional data that we don't predict,
-                        // like HP, status effects, etc. Position is handled by reconciliation.
+                        // For our own player, we only take non-positional data that we don't predict.
+                        // This is where we sync server-authoritative state to our local copy.
                         const stats = this.combatSystem.getStats(id);
                         if (stats) {
-                            // Avoid overwriting HP if an event just updated it, unless server is lower
-                            if (data.hp < stats.hp) stats.hp = data.hp;
+                            stats.hp = data.hp;
                             stats.maxHp = data.maxHp;
                             stats.type = data.type;
                             stats.team = data.team;
                             stats.invisible = data.invisible;
+                            stats.lastActionTime = data.lastActionTime;
                         }
                     }
                 }
@@ -1198,27 +1229,26 @@ export default class GameLoop {
         const serverPlayerState = serverState.entities.get(this.state.myId);
         if (!serverPlayerState) return;
 
-        // Ensure local player exists in GridSystem (Fix for invisible player on join)
         let localPlayer = this.gridSystem.entities.get(this.state.myId);
         if (!localPlayer) {
+            // Player doesn't exist locally, create it with server state.
             this.gridSystem.addEntity(this.state.myId, serverPlayerState.x, serverPlayerState.y);
             localPlayer = this.gridSystem.entities.get(this.state.myId);
-            localPlayer.facing = serverPlayerState.facing;
+            // Immediately sync all visual properties.
+            Object.assign(localPlayer, serverPlayerState);
+            return; // No inputs to reconcile yet, so we're done.
         }
 
         // The server has confirmed processing inputs up to this tick.
         const lastProcessedTick = serverPlayerState.lastProcessedInputTick;
-        if (lastProcessedTick === 0) return; // Haven't received any acks yet
 
         // Remove all inputs from our buffer that the server has already processed.
-        this.state.inputBuffer = this.state.inputBuffer.filter(input => input.tick > lastProcessedTick);
+        if (lastProcessedTick > 0) {
+            this.state.inputBuffer = this.state.inputBuffer.filter(input => input.tick > lastProcessedTick);
+        }
 
-        // Start with the authoritative server position.
-        let reconciledState = { 
-            x: serverPlayerState.x, 
-            y: serverPlayerState.y, 
-            facing: serverPlayerState.facing
-        };
+        // Start with the authoritative server state (position, and other properties like visibility).
+        let reconciledState = { ...serverPlayerState };
 
         // Re-apply all remaining inputs on top of the server state to get the "correct" current client position.
         for (const input of this.state.inputBuffer) {
@@ -1240,15 +1270,20 @@ export default class GameLoop {
             }
         }
 
-        const error = Math.abs(reconciledState.x - localPlayer.x) + Math.abs(reconciledState.y - localPlayer.y);
+        // Calculate error between client's current position and the re-simulated, correct position.
+        const errorX = reconciledState.x - localPlayer.x;
+        const errorY = reconciledState.y - localPlayer.y;
 
-        if (error > 0.01) { // A small threshold to prevent corrections for tiny float differences
-            // Snap to the reconciled position. This is better than snapping to the old server position.
-            // A further improvement would be to smoothly interpolate to this position.
+        // If there's a discrepancy, snap to the reconciled state.
+        // This happens if the server rejected an input that the client predicted.
+        if (Math.abs(errorX) > 0.01 || Math.abs(errorY) > 0.01) {
             localPlayer.x = reconciledState.x;
             localPlayer.y = reconciledState.y;
-            localPlayer.facing = reconciledState.facing;
         }
+
+        // Always sync non-positional, server-authoritative state like facing direction and visibility.
+        localPlayer.facing = reconciledState.facing;
+        localPlayer.invisible = reconciledState.invisible;
     }
 
     render(alpha) {

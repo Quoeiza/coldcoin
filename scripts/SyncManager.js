@@ -2,9 +2,8 @@ export default class SyncManager {
     constructor(config) {
         this.snapshotBuffer = [];
         // Delay interpolation to ensure we have a "next" frame to lerp to.
-        // Increased to 250ms to handle variable network latency (PeerJS) and prevent stuttering.
         // If latency + tickRate > delay, you get stutter. 250ms is a safe buffer.
-        this.interpolationDelay = 250;
+        this.interpolationDelay = 125;
         this.timeOffset = null; // Server Time - Client Time
         this.reusableEntities = new Map(); // Reuse to reduce GC
     }
@@ -23,7 +22,9 @@ export default class SyncManager {
                 maxHp: stats ? stats.maxHp : 100, 
                 team: stats ? stats.team : 'player', 
                 type: stats ? stats.type : 'player',
-                invisible: pos.invisible
+                invisible: pos.invisible,
+                lastActionTime: stats ? stats.lastActionTime : 0,
+                lastProcessedInputTick: stats ? stats.lastProcessedInputTick : 0
             }]);
 
         }
@@ -104,6 +105,9 @@ export default class SyncManager {
         const lootMap = new Map(next.loot || []); // Loot uses most recent state (no lerp needed)
         const interpolatedProjectiles = [];
 
+        const latest = this.snapshotBuffer[this.snapshotBuffer.length - 1];
+        const latestEntitiesMap = new Map(latest.entities);
+
         // Interpolate positions
         const nextEntitiesMap = new Map(next.entities);
         
@@ -111,6 +115,7 @@ export default class SyncManager {
         for (const [id, prevPos] of prev.entities) {
             if (nextEntitiesMap.has(id)) {
                 const nextPos = nextEntitiesMap.get(id);
+                const latestEntityData = latestEntitiesMap.get(id) || nextPos;
                 
                 // Sanitize inputs to prevent NaN propagation
                 const prevX = Number.isFinite(prevPos.x) ? prevPos.x : 0;
@@ -123,13 +128,16 @@ export default class SyncManager {
                 const y = prevY + (nextY - prevY) * ratio;
 
                 interpolatedEntities.set(id, {
-                    ...nextPos, // Inherit latest properties (HP, Status)
+                    ...latestEntityData, // Inherit latest properties (HP, Status)
                     x,
                     y
                 });
 
-                // Apply Bump Data from Next Frame (cosmetic data doesn't need interpolation)
-                Object.assign(interpolatedEntities.get(id), { bumpStart: nextPos.bumpStart, bumpDir: nextPos.bumpDir });
+                // Bump data should also use the latest value to avoid delay
+                Object.assign(interpolatedEntities.get(id), { 
+                    bumpStart: latestEntityData.bumpStart, 
+                    bumpDir: latestEntityData.bumpDir 
+                });
             }
         }
         

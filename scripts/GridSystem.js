@@ -246,6 +246,8 @@ export default class GridSystem {
     }
 
     getMovementCost(x, y) {
+        x = Math.round(x);
+        y = Math.round(y);
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) return 1.0;
         const t = this.grid[y][x];
         if (t === 4) return 1.5; // Lava slows
@@ -336,7 +338,7 @@ export default class GridSystem {
     }
 
     addEntity(id, x, y) {
-        this.entities.set(id, { x, y, facing: { x: 0, y: 1 } });
+        this.entities.set(id, { x, y, facing: { x: 0, y: 1 }, invisible: false });
         this.spatialMap.set(this.getKey(x, y), id);
     }
 
