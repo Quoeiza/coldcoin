@@ -125,6 +125,54 @@ export default class GameLoop {
         }
     }
 
+    startQuickJoin() {
+        document.getElementById('lobby-screen').classList.add('hidden');
+        this.audioSystem.stopMusic();
+        
+        this.setupNetwork();
+        this.uiSystem.setupUI();
+        this.inputManager.on('intent', (intent) => this.handleInput(intent));
+        this.inputManager.on('click', (data) => this.handleMouseClick(data));
+        this.inputManager.on('mousemove', (data) => this.handleMouseMove(data));
+        this.audioSystem.resume();
+
+        this.ticker.start();
+
+        this.peerClient.init();
+        this.peerClient.on('ready', async (id) => {
+            this.uiSystem.showNotification("Scanning for sessions...");
+            try {
+                const sessions = await this.peerClient.scanForSessions();
+                
+                // Filter for stable ping and valid ID string, then sort by time remaining derived from ID string
+                const valid = sessions.filter(s => s.ping < 300 && s.id.includes('coldcoin-')).sort((a, b) => {
+                    const getTime = (id) => {
+                        const parts = id.split('-');
+                        // Format: coldcoin-CODE-TIMESTAMP
+                        return parts.length >= 3 ? parseInt(parts[2]) : 0;
+                    };
+                    // Sort by latest start time (highest timestamp) -> effectively least time elapsed / most remaining
+                    return getTime(b.id) - getTime(a.id);
+                });
+                
+                if (valid.length > 0) {
+                    const best = valid[0];
+                    const parts = best.id.split('-');
+                    const displayId = parts.length >= 2 ? parts[1] : best.id;
+                    this.uiSystem.showNotification(`Joining Room ${displayId}...`);
+                    this.peerClient.connect(best.id, { name: this.playerData.name, class: this.playerData.class, gold: this.playerData.gold });
+                } else {
+                    this.uiSystem.showNotification("No suitable sessions found.");
+                    setTimeout(() => location.reload(), 2000);
+                }
+            } catch (e) {
+                console.error("Quick Join Error:", e);
+                this.uiSystem.showNotification("Quick Join Failed.");
+                setTimeout(() => location.reload(), 2000);
+            }
+        });
+    }
+
     respawnAsMonster(entityId) {
         const { type } = this.combatSystem.respawnPlayerAsMonster(entityId, this.gridSystem);
         
@@ -146,11 +194,12 @@ export default class GameLoop {
 
         this.ticker.start();
 
-        const myPeerId = isHost ? `coldcoin-${this.peerClient.generateRoomId()}` : undefined;
+        const myPeerId = isHost ? `coldcoin-${this.peerClient.generateRoomId()}-${Date.now()}` : undefined;
         this.peerClient.init(myPeerId);
         this.peerClient.on('ready', (id) => {
             if (isHost) {
-                const displayId = id.replace('coldcoin-', '');
+                const parts = id.split('-');
+                const displayId = parts.length >= 2 ? parts[1] : id;
                 this.startHost(id);
                 document.getElementById('room-code-display').innerText = `Room: ${displayId}`;
             } else if (hostId) {

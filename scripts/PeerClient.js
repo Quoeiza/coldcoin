@@ -85,4 +85,17 @@ export default class PeerClient extends EventEmitter {
         }
         return result;
     }
+
+    async scanForSessions() {
+        // Placeholder: In a real P2P mesh without a directory server, scanning is difficult.
+        // Returning mock rooms with timestamps in the ID string as requested.
+        // Format: coldcoin-{CODE}-{START_TIMESTAMP}
+        return new Promise(resolve => {
+            setTimeout(() => resolve([
+                { id: `coldcoin-ALPHA-${Date.now() - 60000}`, ping: 50 },  // Started 1 min ago
+                { id: `coldcoin-BETA-${Date.now() - 300000}`, ping: 120 }, // Started 5 mins ago
+                { id: `coldcoin-GAMMA-${Date.now() - 10000}`, ping: 450 }  // Started 10s ago (High Ping)
+            ]), 1000);
+        });
+    }
 }

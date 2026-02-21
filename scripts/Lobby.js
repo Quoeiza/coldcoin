@@ -1,4 +1,4 @@
-export function setupLobby(uiLayer, playerData, onHost, onJoin) {
+export function setupLobby(uiLayer, playerData, onHost, onJoin, onQuickJoin) {
     const lobby = document.createElement('div');
     lobby.id = 'lobby-screen';
     
@@ -20,6 +20,7 @@ export function setupLobby(uiLayer, playerData, onHost, onJoin) {
                     <option value="Rogue">Rogue (Stealth)</option>
                     <option value="Barbarian">Barbarian (Rage)</option>
                 </select>
+                <button id="btn-quick-join">Quick Join</button>
                 <button id="btn-host">Host Game</button>
                 <div class="join-row">
                     <input type="text" id="room-code-input" placeholder="****" />
@@ -53,6 +54,12 @@ export function setupLobby(uiLayer, playerData, onHost, onJoin) {
         const name = document.getElementById('player-name').value;
         const playerClass = document.getElementById('class-select').value;
         onHost(name, playerClass);
+    };
+
+    document.getElementById('btn-quick-join').onclick = () => {
+        const name = document.getElementById('player-name').value;
+        const playerClass = document.getElementById('class-select').value;
+        if (onQuickJoin) onQuickJoin(name, playerClass);
     };
 
     document.getElementById('btn-join').onclick = () => {

@@ -31,6 +31,13 @@ export default class UISystem {
                 this.game.database.savePlayer({ name: this.game.playerData.name });
                 this.enableFullscreen();
                 this.game.startGame(false, code);
+            },
+            (name, cls) => {
+                this.game.playerData.name = name || 'Traveler';
+                this.game.playerData.class = cls;
+                this.game.database.savePlayer({ name: this.game.playerData.name });
+                this.enableFullscreen();
+                this.game.startQuickJoin();
             }
         );
     }
@@ -373,7 +380,9 @@ export default class UISystem {
         });
 
         screen.innerHTML = `
-            <h1 style="font-size: 4rem; margin-bottom: 1rem; text-shadow: 0 0 10px #ff0000;">THE DUNGEON SLEEPS</h1>
+            <h1 style="font-size: 4rem; margin-bottom: 1rem; text-shadow: 0 0 10px #ff0000;">THE</h1>
+            <h1 style="font-size: 4rem; margin-bottom: 1rem; text-shadow: 0 0 10px #ff0000;">DUNGEON</h1>
+            <h1 style="font-size: 4rem; margin-bottom: 1rem; text-shadow: 0 0 10px #ff0000;">SLEEPS</h1>
             <h2 style="font-size: 2rem; margin-bottom: 2rem; color: #ccc;">${msg}</h2>
             <button id="btn-return-lobby" style="padding: 15px 30px; font-size: 1.2rem; cursor: pointer; background: #444; color: white; border: 1px solid #666;">Return to Lobby</button>
         `;
