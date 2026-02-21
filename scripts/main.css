@@ -164,9 +164,14 @@ input, select {
 
 #room-code-input {
     font-size: 7vh;
-    padding: 0.5vh;
+    padding: 0vh;
     text-align: center;
     text-transform: capitalize;
+}
+
+#room-code-input::placeholder {
+    font-size: 7vh;
+    transform: translateY(1.5vh);
 }
 
 #game-logo {
