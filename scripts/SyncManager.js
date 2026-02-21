@@ -25,6 +25,7 @@ export default class SyncManager {
                 type: stats ? stats.type : 'player',
                 invisible: pos.invisible
             }]);
+
         }
 
         return {
@@ -126,6 +127,9 @@ export default class SyncManager {
                     x,
                     y
                 });
+
+                // Apply Bump Data from Next Frame (cosmetic data doesn't need interpolation)
+                Object.assign(interpolatedEntities.get(id), { bumpStart: nextPos.bumpStart, bumpDir: nextPos.bumpDir });
             }
         }
         

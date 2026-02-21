@@ -69,8 +69,8 @@ export default class PeerClient extends EventEmitter {
         });
 
         this.peer.on('error', (err) => {
-            console.error(err);
             if (this.isScanning && err.type === 'peer-unavailable') return;
+            console.error(err);
             this.emit('error', err);
         });
     }
@@ -89,8 +89,13 @@ export default class PeerClient extends EventEmitter {
             this.emit('connected', { peerId: conn.peer, metadata: conn.metadata });
         });
         conn.on('close', () => {
-            this.emit('disconnected', conn.peer);
             this.connections = this.connections.filter(c => c !== conn);
+            // Debounce disconnect to handle race conditions (e.g. Scan -> Join)
+            setTimeout(() => {
+                if (!this.connections.some(c => c.peer === conn.peer)) {
+                    this.emit('disconnected', conn.peer);
+                }
+            }, 100);
         });
 
         // If connection is already open (race condition), emit immediately

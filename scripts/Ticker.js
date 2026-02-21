@@ -34,6 +34,9 @@ export default class Ticker {
         
         /** @private @type {?number} The ID of the current animation frame request. */
         this.animationFrameId = null;
+
+        /** @type {number} The current simulation tick count. */
+        this.tick = 0;
     }
 
     /**
@@ -81,6 +84,7 @@ export default class Ticker {
         try {
             // Perform a fixed number of updates based on the accumulated time.
             while (this.accumulator >= this.timePerTick) {
+                this.tick++;
                 this.updateFn(this.timePerTick); // Pass fixed delta time to the update function.
                 this.accumulator -= this.timePerTick;
                 

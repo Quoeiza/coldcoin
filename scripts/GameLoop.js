@@ -57,7 +57,11 @@ export default class GameLoop {
             isEscaping: false,
             autoPath: [],
             chaseTargetId: null,
-            gameOver: false
+            gameOver: false,
+
+            // Client-side prediction & reconciliation
+            inputBuffer: [],
+            lastProcessedInputTick: 0
         };
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
@@ -353,7 +357,8 @@ export default class GameLoop {
         this.combatSystem.on('damage', ({ targetId, amount, currentHp, sourceId, options }) => {
             if (targetId === this.state.myId) {
                 const hpEl = document.getElementById('hp-val');
-                if (hpEl) hpEl.innerText = Math.max(0, currentHp);
+                if (hpEl) hpEl.innerText = Math.max(0, currentHp); // UI Feedback (Local)
+
                 this.renderSystem.triggerShake(5, 200);
                 this.audioSystem.play('hit', this.gridSystem.entities.get(targetId).x, this.gridSystem.entities.get(targetId).y);
             }
@@ -572,12 +577,13 @@ export default class GameLoop {
         });
 
         this.peerClient.on('connected', ({ peerId, metadata }) => {
+            const meta = metadata || {};
             if (this.state.isHost) {
                 const spawn = this.gridSystem.getSpawnPoint(true);
                 this.gridSystem.addEntity(peerId, spawn.x, spawn.y);
-                this.combatSystem.registerEntity(peerId, 'player', true, metadata.class || 'Fighter', metadata.name || 'Unknown');
+                this.combatSystem.registerEntity(peerId, 'player', true, meta.class || 'Fighter', meta.name || 'Unknown');
                 const stats = this.combatSystem.getStats(peerId);
-                if (stats) stats.gold = metadata.gold || 0;
+                if (stats) stats.gold = meta.gold || 0;
 
                 // Starter Items for Client
                 this.lootSystem.addItemToEntity(peerId, 'sword_basic', 1);
@@ -712,21 +718,39 @@ export default class GameLoop {
         this.state.nextActionTime = Date.now() + cooldown;
         this.state.actionBuffer = null;
 
-        if (!this.state.isHost && intent.type === 'MOVE') {
-            this.processPlayerInput(this.state.myId, intent);
-        }
+        // Tag input with a tick for reconciliation
+        const input = {
+            tick: this.ticker.tick,
+            intent: intent
+        };
 
         if (this.state.isHost) {
-            this.processPlayerInput(this.state.myId, intent);
+            // Host executes immediately
+            this.processPlayerInput(this.state.myId, input);
         } else {
-            this.peerClient.send({ type: NetworkEvents.INPUT, payload: intent });
+            // Client predicts and sends to host
+            this.state.inputBuffer.push(input);
+
+            // Predict locally for responsiveness
+            if (intent.type === 'MOVE') {
+                this.processPlayerInput(this.state.myId, input);
+            }
+            
+            this.peerClient.send({ type: NetworkEvents.INPUT, payload: input });
         }
     }
 
-    processPlayerInput(entityId, intent) {
+    processPlayerInput(entityId, input) {
+        const { intent, tick } = input;
         if (!intent || !intent.type) return;
 
         let stats = this.combatSystem.getStats(entityId);
+
+        // On the host, mark the last input tick we've processed for this player.
+        // This will be sent back in the next snapshot.
+        if (this.state.isHost && stats) {
+            stats.lastProcessedInputTick = tick;
+        }
 
         if (!stats && entityId === this.state.myId && !this.state.isHost) {
             this.combatSystem.registerEntity(entityId, 'player', true, this.playerData.class, this.playerData.name);
@@ -1056,56 +1080,33 @@ export default class GameLoop {
             const latestState = this.syncManager.getLatestState();
             
             if (latestState) {
+                // First, update the state of all entities EXCEPT our own player.
                 this.gridSystem.syncRemoteEntities(latestState.entities, this.state.myId);
-                
                 this.lootSystem.syncLoot(latestState.loot);
-                
+
                 for (const [id, data] of latestState.entities) {
                     if (id !== this.state.myId) {
                         this.combatSystem.syncRemoteStats(id, data);
                     } else {
+                        // For our own player, we only take non-positional data that we don't predict,
+                        // like HP, status effects, etc. Position is handled by reconciliation.
                         const stats = this.combatSystem.getStats(id);
                         if (stats) {
-                            stats.hp = data.hp;
+                            // Avoid overwriting HP if an event just updated it, unless server is lower
+                            if (data.hp < stats.hp) stats.hp = data.hp;
                             stats.maxHp = data.maxHp;
                             stats.type = data.type;
                             stats.team = data.team;
                             stats.invisible = data.invisible;
-                        } else {
-                            this.combatSystem.registerEntity(id, data.type || 'player', true, this.playerData.class, this.playerData.name);
-                            const newStats = this.combatSystem.getStats(id);
-                            if (newStats) {
-                                newStats.hp = data.hp;
-                                newStats.maxHp = data.maxHp;
-                                newStats.type = data.type;
-                                newStats.team = data.team;
-                            }
                         }
                     }
                 }
+                
+                // Reconcile our player's position based on the server state and our pending inputs.
+                this.reconcilePlayer(latestState);
 
                 this.state.projectiles = latestState.projectiles;
                 this.state.gameTime = latestState.gameTime;
-
-                const serverPos = latestState.entities.get(this.state.myId);
-                const localPos = this.gridSystem.entities.get(this.state.myId);
-            
-                if (serverPos) {
-                if (this.state.isEscaping && serverPos.team !== 'monster') {
-                    return;
-                }
-                if (serverPos.team === 'monster') this.state.isEscaping = false;
-
-                if (!localPos) {
-                    this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
-                } else {
-                    const dist = Math.abs(serverPos.x - localPos.x) + Math.abs(serverPos.y - localPos.y);
-                    if (dist > 1.5) {
-                        console.warn("Reconciling position. Dist:", dist);
-                        this.gridSystem.addEntity(this.state.myId, Math.round(serverPos.x), Math.round(serverPos.y));
-                    }
-                }
-                }
             }
         }
 
@@ -1190,6 +1191,63 @@ export default class GameLoop {
 
         if (this.state.isHost) {
             this.aiSystem.update(dt, (attackerId, targetId) => this.performAttack(attackerId, targetId));
+        }
+    }
+
+    reconcilePlayer(serverState) {
+        const serverPlayerState = serverState.entities.get(this.state.myId);
+        if (!serverPlayerState) return;
+
+        // Ensure local player exists in GridSystem (Fix for invisible player on join)
+        let localPlayer = this.gridSystem.entities.get(this.state.myId);
+        if (!localPlayer) {
+            this.gridSystem.addEntity(this.state.myId, serverPlayerState.x, serverPlayerState.y);
+            localPlayer = this.gridSystem.entities.get(this.state.myId);
+            localPlayer.facing = serverPlayerState.facing;
+        }
+
+        // The server has confirmed processing inputs up to this tick.
+        const lastProcessedTick = serverPlayerState.lastProcessedInputTick;
+        if (lastProcessedTick === 0) return; // Haven't received any acks yet
+
+        // Remove all inputs from our buffer that the server has already processed.
+        this.state.inputBuffer = this.state.inputBuffer.filter(input => input.tick > lastProcessedTick);
+
+        // Start with the authoritative server position.
+        let reconciledState = { 
+            x: serverPlayerState.x, 
+            y: serverPlayerState.y, 
+            facing: serverPlayerState.facing
+        };
+
+        // Re-apply all remaining inputs on top of the server state to get the "correct" current client position.
+        for (const input of this.state.inputBuffer) {
+            if (input.intent.type === 'MOVE') {
+                const isMonster = false; // Assume player is not a monster for prediction
+                // Create a temporary entity-like object for resolution
+                const tempEntity = { id: 'ghost', x: reconciledState.x, y: reconciledState.y, facing: reconciledState.facing };
+                this.gridSystem.entities.set('ghost', tempEntity);
+                const result = this.gridSystem.resolveMoveIntent('ghost', input.intent.direction, this.lootSystem, isMonster);
+                this.gridSystem.entities.delete('ghost');
+
+                if (result.type === 'MOVED') {
+                    reconciledState.x = result.x;
+                    reconciledState.y = result.y;
+                    reconciledState.facing = result.facing;
+                } else if (result.type.startsWith('BUMP')) {
+                    reconciledState.facing = result.direction;
+                }
+            }
+        }
+
+        const error = Math.abs(reconciledState.x - localPlayer.x) + Math.abs(reconciledState.y - localPlayer.y);
+
+        if (error > 0.01) { // A small threshold to prevent corrections for tiny float differences
+            // Snap to the reconciled position. This is better than snapping to the old server position.
+            // A further improvement would be to smoothly interpolate to this position.
+            localPlayer.x = reconciledState.x;
+            localPlayer.y = reconciledState.y;
+            localPlayer.facing = reconciledState.facing;
         }
     }
 

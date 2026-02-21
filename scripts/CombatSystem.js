@@ -36,7 +36,8 @@ export default class CombatSystem extends EventEmitter {
             aiState: 'IDLE',
             targetLastPos: null,
             memoryTimer: 0,
-            class: playerClass,
+
+ class: playerClass,
             invisible: false,
             damageBuff: 0,
             name: name || type,
