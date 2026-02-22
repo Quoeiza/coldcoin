@@ -109,7 +109,7 @@ export default class GameLoop {
         }
 
         const actorImages = {
-            'rogue.png': './assets/images/actors/rogue.png'
+            'eliteknight.png': './assets/images/actors/eliteknight.png'
         };
         if (this.config.enemies) {
             for (const key in this.config.enemies) {

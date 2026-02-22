@@ -632,7 +632,7 @@ export default class RenderSystem {
 
             let spriteKey = null;
             if (type === 'player') {
-                spriteKey = 'rogue.png';
+                spriteKey = 'eliteknight.png';
             } else if (this.combatSystem && this.combatSystem.enemiesConfig[type]) {
                 spriteKey = this.combatSystem.enemiesConfig[type].sprite;
             }
@@ -1265,7 +1265,7 @@ export default class RenderSystem {
 
                     let spriteKey = null;
                     if (type === 'player') {
-                        spriteKey = 'rogue.png';
+                        spriteKey = 'eliteknight.png';
                     } else if (this.combatSystem && this.combatSystem.enemiesConfig[type]) {
                         spriteKey = this.combatSystem.enemiesConfig[type].sprite;
                     }
