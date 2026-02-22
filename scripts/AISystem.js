@@ -6,14 +6,11 @@ export default class AISystem {
         this.aiDirs = [{x:0, y:1}, {x:0, y:-1}, {x:1, y:0}, {x:-1, y:0}];
     }
 
-    update(dt, attackCallback) {
-        const now = Date.now();
+    update(currentTick, timePerTick, attackCallback) {
         for (const [id, stats] of this.combatSystem.stats) {
             if (stats.isPlayer) continue;
             
-            // AI Logic: Variable cooldown
-            const cooldown = stats.actionCooldown || 500;
-            if (now - (stats.lastActionTime || 0) < cooldown) continue;
+            if (currentTick < stats.nextActionTick) continue;
 
             const pos = this.gridSystem.entities.get(id);
             if (!pos) continue;
@@ -49,15 +46,15 @@ export default class AISystem {
                     const dir = this.aiDirs[Math.floor(Math.random() * this.aiDirs.length)];
                     if (!this.lootSystem.isCollidable(pos.x + dir.x, pos.y + dir.y)) {
                         this.gridSystem.moveEntity(id, dir.x, dir.y);
-                        stats.lastActionTime = now;
-                        stats.actionCooldown = stats.moveSpeed || 1000;
+                        const cooldownMs = stats.moveSpeed || 1000;
+                        stats.nextActionTick = currentTick + Math.ceil(cooldownMs / timePerTick);
                     }
                 }
             }
 
             // Persistence Logic
             if (!targetPos && stats.aiState === 'CHASING' && stats.targetLastPos) {
-                stats.memoryTimer -= dt;
+                stats.memoryTimer -= timePerTick;
                 if (stats.memoryTimer > 0) {
                     targetPos = stats.targetLastPos;
                 } else {
@@ -76,8 +73,8 @@ export default class AISystem {
                     pos.facing = { x: Math.sign(dx), y: Math.sign(dy) };
                     // Attack (Only if we have actual target/LOS)
                     if (attackCallback) attackCallback(id, nearestPlayerId);
-                    stats.lastActionTime = now;
-                    stats.actionCooldown = (stats.attackSpeed || 4) * 250;
+                    const cooldownMs = (stats.attackSpeed || 4) * 250;
+                    stats.nextActionTick = currentTick + Math.ceil(cooldownMs / timePerTick);
                 } else {
                     // Move towards player (Simple Axis-Aligned)
                     let moveX = Math.sign(dx);
@@ -88,8 +85,8 @@ export default class AISystem {
                     if (!this.lootSystem.isCollidable(pos.x + moveX, pos.y + moveY)) {
                         this.gridSystem.moveEntity(id, moveX, moveY);
                     }
-                    stats.lastActionTime = now;
-                    stats.actionCooldown = stats.moveSpeed || 1000;
+                    const cooldownMs = stats.moveSpeed || 1000;
+                    stats.nextActionTick = currentTick + Math.ceil(cooldownMs / timePerTick);
                 }
             }
         }

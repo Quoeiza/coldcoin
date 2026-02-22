@@ -50,7 +50,7 @@ export default class GameLoop {
             gameTime: 0,
             escapeOpen: false,
             actionBuffer: null,
-            nextActionTime: 0,
+            nextInputTick: 0,
             projectiles: [],
             interaction: null,
             netTimer: 0,
@@ -67,6 +67,17 @@ export default class GameLoop {
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
         
+        // Debug Stats
+        this.debugStats = {
+            bytesIn: 0,
+            bytesOut: 0,
+            packetsIn: 0,
+            packetsOut: 0,
+            lastSnapshotSize: 0,
+            lastSnapshotEntities: 0,
+            lastUpdate: Date.now()
+        };
+
         // Delegate loop handling to core utility
         this.ticker = new Ticker(
             (dt) => this.update(dt), 
@@ -76,6 +87,7 @@ export default class GameLoop {
     }
 
     async init() {
+        this.createDebugUI();
         await this._loadAssetsAndConfig();
         await this._loadPlayerData();
         await this._initializeSystems();
@@ -143,6 +155,19 @@ export default class GameLoop {
         this.combatSystem.setLootSystem(this.lootSystem);
         this.inputManager = new InputManager(this.config.global);
         this.peerClient = new PeerClient(this.config.net);
+        
+        // DEBUG: Monitor Outgoing Traffic
+        const origSend = this.peerClient.send.bind(this.peerClient);
+        this.peerClient.send = (data) => {
+            this.monitorNetwork(data, false);
+            origSend(data);
+        };
+        const origSendTo = this.peerClient.sendTo.bind(this.peerClient);
+        this.peerClient.sendTo = (id, data) => {
+            this.monitorNetwork(data, false);
+            origSendTo(id, data);
+        };
+
         this.syncManager = new SyncManager(this.config.global);
         this.audioSystem = new AudioSystem();
         await this.audioSystem.setAssetLoader(this.assetSystem);
@@ -534,6 +559,9 @@ export default class GameLoop {
                         this.renderSystem.addFloatingText(pos.x, pos.y, text, color);
                     }
                     this.renderSystem.triggerDamage(id, sourceId);
+                    if (sourceId) {
+                        this.renderSystem.triggerAttack(sourceId);
+                    }
 
                 } else if (data.type === NetworkEvents.ENTITY_DEATH) {
                     this.gridSystem.removeEntity(data.payload.id);
@@ -547,16 +575,17 @@ export default class GameLoop {
                     this.gridSystem.setTile(data.payload.x, data.payload.y, 9);
                     this.uiSystem.showNotification("The Escape Portal has opened!");
                     this.audioSystem.play('pickup', data.payload.x, data.payload.y);
-                                                } else if (data.type === NetworkEvents.RESPAWN_MONSTER) {
-                                                    if (data.payload.id === this.state.myId) {
-                                                        this.uiSystem.showNotification(`Respawned as ${data.payload.type}`);
-                                                        const stats = this.combatSystem.getStats(this.state.myId);
-                                                        if (stats) {
-                                                            stats.type = data.payload.type;
-                                                            stats.team = 'monster';
-                                                        }
-                                                    }
-                                                } else if (data.type === NetworkEvents.CLIENT_EFFECT) {                    const { name, x, y } = data.payload;
+                } else if (data.type === NetworkEvents.RESPAWN_MONSTER) {
+                    if (data.payload.id === this.state.myId) {
+                        this.uiSystem.showNotification(`Respawned as ${data.payload.type}`);
+                        const stats = this.combatSystem.getStats(this.state.myId);
+                        if (stats) {
+                            stats.type = data.payload.type;
+                            stats.team = 'monster';
+                        }
+                    }
+                } else if (data.type === NetworkEvents.CLIENT_EFFECT) {
+                    const { name, x, y } = data.payload;
                     const pos = this.gridSystem.entities.get(this.state.myId);
                     
                     if (name === 'miss') {
@@ -567,30 +596,25 @@ export default class GameLoop {
                         this.renderSystem.addEffect(x, y, 'slash');
                         if (pos) this.audioSystem.play('swing', pos.x, pos.y);
                     }
-                }
-
-                if (data.type === NetworkEvents.SPAWN_PROJECTILE) {
+                } else if (data.type === NetworkEvents.SPAWN_PROJECTILE) {
                     this.audioSystem.play('attack', data.payload.x, data.payload.y);
-                }
-
-                if (data.type === NetworkEvents.UPDATE_GOLD) {
+                    if (data.payload.ownerId) {
+                        this.renderSystem.triggerAttack(data.payload.ownerId);
+                    }
+                } else if (data.type === NetworkEvents.UPDATE_GOLD) {
                     if (data.payload.id === this.state.myId) {
                         this.playerData.gold = (this.playerData.gold || 0) + data.payload.amount;
                         this.database.updatePlayer({ gold: this.playerData.gold });
                         this.uiSystem.updateGoldUI();
                         this.uiSystem.showNotification(`+${data.payload.amount}g`);
                     }
-                }
-
-                if (data.type === NetworkEvents.LOOT_SUCCESS) {
+                } else if (data.type === NetworkEvents.LOOT_SUCCESS) {
                     if (data.payload.id === this.state.myId) {
                         this.audioSystem.play('pickup', 0, 0);
                         this.uiSystem.renderInventory();
                         this.uiSystem.updateQuickSlotUI();
                     }
-                }
-
-                if (data.type === NetworkEvents.UPDATE_INVENTORY) {
+                } else if (data.type === NetworkEvents.UPDATE_INVENTORY) {
                     if (this.lootSystem.inventories) this.lootSystem.inventories.set(this.state.myId, data.payload.inventory);
                     if (this.lootSystem.equipment) this.lootSystem.equipment.set(this.state.myId, data.payload.equipment);
                     this.uiSystem.renderInventory();
@@ -615,7 +639,8 @@ export default class GameLoop {
                 // Send initial state right away
                 const snapshot = this.syncManager.serializeState(
                     this.gridSystem, this.combatSystem, this.lootSystem,
-                    this.state.projectiles, this.state.gameTime
+                    this.state.projectiles, this.state.gameTime,
+                    true // Full Sync (Includes Loot)
                 );
                 this.peerClient.sendTo(peerId, {
                     type: NetworkEvents.INIT_WORLD,
@@ -664,6 +689,10 @@ export default class GameLoop {
         });
     }
 
+    calculateCooldownTicks(ms) {
+        return Math.ceil(ms / this.ticker.timePerTick);
+    }
+
     handleInput(intent) {
         if (intent.type === 'TOGGLE_MENU') {
             this.uiSystem.toggleSettingsMenu();
@@ -678,8 +707,7 @@ export default class GameLoop {
             return;
         }
 
-        const now = Date.now();
-        if (now >= this.state.nextActionTime) {
+        if (this.ticker.tick >= this.state.nextInputTick) {
             this.executeAction(intent);
         } else {
             this.state.actionBuffer = intent;
@@ -736,8 +764,9 @@ export default class GameLoop {
     }
 
     executeAction(intent) {
-        const cooldown = this.config.global.globalCooldownMs || 250;
-        this.state.nextActionTime = Date.now() + cooldown;
+        const cooldownMs = this.config.global.globalCooldownMs || 250;
+        const cooldownTicks = this.calculateCooldownTicks(cooldownMs);
+        this.state.nextInputTick = this.ticker.tick + cooldownTicks;
         this.state.actionBuffer = null;
 
         // Tag input with a tick for reconciliation
@@ -760,7 +789,7 @@ export default class GameLoop {
     }
 
     processPlayerInput(entityId, input) {
-        const { intent, tick } = input;
+        const { intent } = input;
         if (!intent || !intent.type) return;
 
         let stats = this.combatSystem.getStats(entityId);
@@ -768,7 +797,7 @@ export default class GameLoop {
         // On the host, mark the last input tick we've processed for this player.
         // This will be sent back in the next snapshot.
         if (this.state.isHost && stats) {
-            stats.lastProcessedInputTick = tick;
+            stats.lastProcessedInputTick = input.tick;
         }
 
         if (!stats && entityId === this.state.myId && !this.state.isHost) {
@@ -776,8 +805,9 @@ export default class GameLoop {
             stats = this.combatSystem.getStats(entityId);
         }
 
-        let now = Date.now();
-        let cooldown = this.combatSystem.calculateCooldown(entityId, this.config.global.globalCooldownMs || 250);
+        const currentTick = this.ticker.tick;
+        const cooldownMs = this.combatSystem.calculateCooldown(entityId, this.config.global.globalCooldownMs || 250);
+        let cooldownTicks = this.calculateCooldownTicks(cooldownMs);
 
         const pos = this.gridSystem.entities.get(entityId);
         
@@ -814,14 +844,14 @@ export default class GameLoop {
 
         if (pos && intent.type === 'MOVE') {
             const cost = this.gridSystem.getMovementCost(pos.x + intent.direction.x, pos.y + intent.direction.y);
-            cooldown *= cost;
+            cooldownTicks = Math.ceil(cooldownTicks * cost);
         }
 
         if (!stats) return;
-        if (now - stats.lastActionTime < cooldown) {
+        if (currentTick < stats.nextActionTick) {
             return;
         }
-        stats.lastActionTime = now;
+        stats.nextActionTick = currentTick + cooldownTicks;
 
         if (entityId === this.state.myId && this.state.interaction) {
             this.state.interaction = null;
@@ -841,7 +871,11 @@ export default class GameLoop {
                     const items = this.lootSystem.getItemsAt(tx, ty);
                     const chest = items.find(l => l.type === 'chest' && !l.opened);
                     if (chest) {
-                        this.processLootInteraction(entityId, chest);
+                        if (entityId === this.state.myId && !this.state.isHost) {
+                            this.peerClient.send({ type: NetworkEvents.INTERACT_LOOT, payload: { lootId: chest.id } });
+                        } else {
+                            this.processLootInteraction(entityId, chest);
+                        }
                     }
                     return;
                 }
@@ -855,6 +889,7 @@ export default class GameLoop {
                 this.processLootInteraction(entityId, result.loot);
                 return;
             } else if (result.type === 'MOVED') {
+                this.renderSystem.triggerMove(entityId, { x: result.x, y: result.y });
                 if (entityId === this.state.myId) {
                     this.audioSystem.play('step', pos.x, pos.y);
                     this.renderSystem.addEffect(startX, startY, 'dust');
@@ -982,7 +1017,7 @@ export default class GameLoop {
         }
 
         if (intent.type === 'ABILITY') {
-            const result = this.combatSystem.useAbility(entityId);
+            const result = this.combatSystem.useAbility(entityId, currentTick, this.ticker.timePerTick);
             if (result) {
                 if (result.effect === 'stealth') {
                     const pos = this.gridSystem.entities.get(entityId);
@@ -1077,6 +1112,7 @@ export default class GameLoop {
     }
 
     update(dt) {
+        this.updateDebugUI();
         if (dt > 100) dt = 100;
 
         if (this.state.isHost) {
@@ -1098,7 +1134,8 @@ export default class GameLoop {
                 this.state.netTimer = 0;
                 const snapshot = this.syncManager.serializeState(
                     this.gridSystem, this.combatSystem, this.lootSystem,
-                    this.state.projectiles, this.state.gameTime
+                    this.state.projectiles, this.state.gameTime,
+                    false // Partial Sync (No Loot)
                 );
                 this.peerClient.send({ type: NetworkEvents.SNAPSHOT, payload: snapshot });
             }
@@ -1113,7 +1150,9 @@ export default class GameLoop {
             if (latestState) {
                 // First, update the state of all entities EXCEPT our own player.
                 this.gridSystem.syncRemoteEntities(latestState.entities, this.state.myId);
-                this.lootSystem.syncLoot(latestState.loot);
+                
+                // Only sync loot if the snapshot contained it (Full Sync)
+                if (latestState.loot) this.lootSystem.syncLoot(latestState.loot);
 
                 for (const [id, data] of latestState.entities) {
                     if (id !== this.state.myId) {
@@ -1128,7 +1167,7 @@ export default class GameLoop {
                             stats.type = data.type;
                             stats.team = data.team;
                             stats.invisible = data.invisible;
-                            stats.lastActionTime = data.lastActionTime;
+                            stats.nextActionTick = data.nextActionTick;
                         }
                     }
                 }
@@ -1221,8 +1260,62 @@ export default class GameLoop {
         }
 
         if (this.state.isHost) {
-            this.aiSystem.update(dt, (attackerId, targetId) => this.performAttack(attackerId, targetId));
+            this.aiSystem.update(this.ticker.tick, this.ticker.timePerTick, (attackerId, targetId) => this.performAttack(attackerId, targetId));
         }
+    }
+
+    createDebugUI() {
+        const div = document.createElement('div');
+        div.id = 'debug-overlay';
+        Object.assign(div.style, {
+            position: 'absolute', top: '10px', left: '10px',
+            backgroundColor: 'rgba(0,0,0,0.7)', color: '#0f0',
+            padding: '10px', fontFamily: 'monospace',
+            pointerEvents: 'none', zIndex: '9999', fontSize: '12px'
+        });
+        document.body.appendChild(div);
+    }
+
+    updateDebugUI() {
+        const now = Date.now();
+        if (now - this.debugStats.lastUpdate > 1000) {
+            const el = document.getElementById('debug-overlay');
+            if (el) {
+                el.innerHTML = `
+                    <strong>NET DEBUG</strong><br>
+                    In: ${(this.debugStats.bytesIn / 1024).toFixed(1)} KB/s (${this.debugStats.packetsIn})<br>
+                    Out: ${(this.debugStats.bytesOut / 1024).toFixed(1)} KB/s (${this.debugStats.packetsOut})<br>
+                    Snap Size: ${(this.debugStats.lastSnapshotSize / 1024).toFixed(2)} KB<br>
+                    Entities: ${this.debugStats.lastSnapshotEntities}<br>
+                    Projectiles: ${this.state.projectiles.length}
+                `;
+            }
+            this.debugStats.bytesIn = 0;
+            this.debugStats.bytesOut = 0;
+            this.debugStats.packetsIn = 0;
+            this.debugStats.packetsOut = 0;
+            this.debugStats.lastUpdate = now;
+        }
+    }
+
+    monitorNetwork(data, isIncoming) {
+        try {
+            const len = JSON.stringify(data).length;
+            if (isIncoming) {
+                this.debugStats.bytesIn += len;
+                this.debugStats.packetsIn++;
+                if (data.type === 'SNAPSHOT') {
+                    this.debugStats.lastSnapshotSize = len;
+                    if (data.payload && data.payload.e) {
+                        this.debugStats.lastSnapshotEntities = data.payload.e.length;
+                    }
+                    if (len > 20000) console.warn("Large Snapshot:", len, data);
+                }
+            } else {
+                this.debugStats.bytesOut += len;
+                this.debugStats.packetsOut++;
+            }
+        } catch (e) {}
     }
 
     reconcilePlayer(serverState) {
@@ -1239,51 +1332,17 @@ export default class GameLoop {
             return; // No inputs to reconcile yet, so we're done.
         }
 
-        // The server has confirmed processing inputs up to this tick.
-        const lastProcessedTick = serverPlayerState.lastProcessedInputTick;
-
-        // Remove all inputs from our buffer that the server has already processed.
-        if (lastProcessedTick > 0) {
-            this.state.inputBuffer = this.state.inputBuffer.filter(input => input.tick > lastProcessedTick);
+        // Hard snap to server state as requested for deterministic simulation
+        Object.assign(localPlayer, serverPlayerState);
+        
+        const stats = this.combatSystem.getStats(this.state.myId);
+        if (stats) {
+            stats.nextActionTick = serverPlayerState.nextActionTick;
+            stats.hp = serverPlayerState.hp;
         }
-
-        // Start with the authoritative server state (position, and other properties like visibility).
-        let reconciledState = { ...serverPlayerState };
-
-        // Re-apply all remaining inputs on top of the server state to get the "correct" current client position.
-        for (const input of this.state.inputBuffer) {
-            if (input.intent.type === 'MOVE') {
-                const isMonster = false; // Assume player is not a monster for prediction
-                // Create a temporary entity-like object for resolution
-                const tempEntity = { id: 'ghost', x: reconciledState.x, y: reconciledState.y, facing: reconciledState.facing };
-                this.gridSystem.entities.set('ghost', tempEntity);
-                const result = this.gridSystem.resolveMoveIntent('ghost', input.intent.direction, this.lootSystem, isMonster);
-                this.gridSystem.entities.delete('ghost');
-
-                if (result.type === 'MOVED') {
-                    reconciledState.x = result.x;
-                    reconciledState.y = result.y;
-                    reconciledState.facing = result.facing;
-                } else if (result.type.startsWith('BUMP')) {
-                    reconciledState.facing = result.direction;
-                }
-            }
-        }
-
-        // Calculate error between client's current position and the re-simulated, correct position.
-        const errorX = reconciledState.x - localPlayer.x;
-        const errorY = reconciledState.y - localPlayer.y;
-
-        // If there's a discrepancy, snap to the reconciled state.
-        // This happens if the server rejected an input that the client predicted.
-        if (Math.abs(errorX) > 0.01 || Math.abs(errorY) > 0.01) {
-            localPlayer.x = reconciledState.x;
-            localPlayer.y = reconciledState.y;
-        }
-
-        // Always sync non-positional, server-authoritative state like facing direction and visibility.
-        localPlayer.facing = reconciledState.facing;
-        localPlayer.invisible = reconciledState.invisible;
+        
+        // Clear input buffer since we are snapping to authoritative state
+        this.state.inputBuffer = [];
     }
 
     render(alpha) {

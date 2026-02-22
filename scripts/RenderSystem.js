@@ -335,6 +335,18 @@ export default class RenderSystem {
         }
     }
 
+    triggerMove(id, newPos) {
+        let visual = this.visualEntities.get(id);
+        if (!visual) return; // Don't trigger moves for entities we're not tracking
+
+        // Start new movement interpolation from current visual spot
+        visual.startX = visual.x;
+        visual.startY = visual.y;
+        visual.targetX = newPos.x;
+        visual.targetY = newPos.y;
+        visual.moveStartTime = Date.now();
+    }
+
     triggerBump(id, dir) {
         const visual = this.visualEntities.get(id);
         if (visual) {
@@ -437,21 +449,23 @@ export default class RenderSystem {
                     visual.targetY = pos.y;
                 }
 
-                // Detect Position Change
+                // Detect authoritative position change (e.g. from network update)
                 if (pos.x !== visual.targetX || pos.y !== visual.targetY) {
                     visual.startX = visual.x;
-                    visual.startY = visual.y; 
+                    visual.startY = visual.y;
                     visual.targetX = pos.x;
                     visual.targetY = pos.y;
                     visual.moveStartTime = now;
                 }
 
-                // Linear Interpolation over 250ms
+                // Interpolate visual position
                 if (!visual.isDying) {
                     const moveDuration = 250;
-                    const t = Math.min(1, (now - visual.moveStartTime) / moveDuration);
-                    visual.x = visual.startX + (visual.targetX - visual.startX) * t;
-                    visual.y = visual.startY + (visual.targetY - visual.startY) * t;
+                    visual.moveT = Math.min(1, (now - visual.moveStartTime) / moveDuration);
+                    visual.x = visual.startX + (visual.targetX - visual.startX) * visual.moveT;
+                    visual.y = visual.startY + (visual.targetY - visual.startY) * visual.moveT;
+                } else {
+                    visual.moveT = 1; // Animation is finished if dying
                 }
 
                 // Cache static data needed for rendering after death
@@ -506,9 +520,8 @@ export default class RenderSystem {
         // 4. Render
         for (const item of renderList) {
             const { id, pos, visual } = item;
-            // Hop Animation (Based on fractional grid position)
-            // We use the fractional part of the visual position to determine the hop arc
-            const hopOffset = -Math.sin(Math.PI * Math.max(Math.abs(visual.x % 1), Math.abs(visual.y % 1))) * (this.tileSize * 0.125);
+            // Hop Animation (Based on interpolation progress 't' for a smooth arc)
+            const hopOffset = -Math.sin(visual.moveT * Math.PI) * (this.tileSize * 0.125);
             
             // Idle Animation (Breathing & Swaying)
             let scaleY = 1;
@@ -562,8 +575,8 @@ export default class RenderSystem {
                 }
             }
 
-            const screenX = Math.floor((visual.x * this.tileSize) - Math.floor(this.camera.x) + offsetX + bumpX + recoilOffX);
-            const screenY = Math.floor((visual.y * this.tileSize) - Math.floor(this.camera.y) + offsetY + hopOffset + bumpY + recoilOffY);
+            const screenX = (visual.x * this.tileSize) - this.camera.x + offsetX + bumpX + recoilOffX;
+            const screenY = (visual.y * this.tileSize) - this.camera.y + offsetY + hopOffset + bumpY + recoilOffY;
             
             item.screenX = screenX;
             item.screenY = screenY;
@@ -765,8 +778,8 @@ export default class RenderSystem {
 
     drawLoot(lootMap) {
         lootMap.forEach((loot) => {
-            const screenX = Math.floor((loot.x * this.tileSize) - Math.floor(this.camera.x));
-            const screenY = Math.floor((loot.y * this.tileSize) - Math.floor(this.camera.y));
+            const screenX = (loot.x * this.tileSize) - this.camera.x;
+            const screenY = (loot.y * this.tileSize) - this.camera.y;
             
             if (loot.type === 'bag') {
                 // Draw Bag (Sack)
@@ -851,8 +864,8 @@ export default class RenderSystem {
         this.effects = this.effects.filter(e => now - e.startTime < e.duration);
 
         this.effects.forEach(e => {
-            const screenX = Math.floor((e.x * this.tileSize) - Math.floor(this.camera.x));
-            const screenY = Math.floor((e.y * this.tileSize) - Math.floor(this.camera.y));
+            const screenX = (e.x * this.tileSize) - this.camera.x;
+            const screenY = (e.y * this.tileSize) - this.camera.y;
 
             if (e.type === 'slash') {
                 this.ctx.strokeStyle = '#FFF';
@@ -896,8 +909,8 @@ export default class RenderSystem {
             const elapsed = now - t.startTime;
             const progress = Math.min(1, elapsed / t.duration);
             
-            const startX = (t.x * this.tileSize) - Math.floor(this.camera.x) + (this.tileSize / 2);
-            const startY = (t.y * this.tileSize) - Math.floor(this.camera.y) - (this.tileSize * 0.8);
+            const startX = (t.x * this.tileSize) - this.camera.x + (this.tileSize / 2);
+            const startY = (t.y * this.tileSize) - this.camera.y - (this.tileSize * 0.8);
 
             const screenX = startX + (t.driftX * progress);
             const screenY = startY - (t.driftY * progress);
@@ -918,8 +931,8 @@ export default class RenderSystem {
 
     drawProjectiles(projectiles) {
         projectiles.forEach(p => {
-            const screenX = Math.floor((p.x * this.tileSize) - Math.floor(this.camera.x));
-            const screenY = Math.floor((p.y * this.tileSize) - Math.floor(this.camera.y));
+            const screenX = (p.x * this.tileSize) - this.camera.x;
+            const screenY = (p.y * this.tileSize) - this.camera.y;
             
             // Draw Arrow
             this.ctx.save();
@@ -940,8 +953,8 @@ export default class RenderSystem {
     drawInteractionBar(interaction, playerPos) {
         if (!interaction || !playerPos) return;
         
-        const screenX = Math.floor((playerPos.x * this.tileSize) - Math.floor(this.camera.x));
-        const screenY = Math.floor((playerPos.y * this.tileSize) - Math.floor(this.camera.y));
+        const screenX = (playerPos.x * this.tileSize) - this.camera.x;
+        const screenY = (playerPos.y * this.tileSize) - this.camera.y;
         const progress = Math.min(1, (Date.now() - interaction.startTime) / interaction.duration);
 
         // Border

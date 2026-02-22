@@ -31,7 +31,7 @@ export default class CombatSystem extends EventEmitter {
             damage: 10, 
             isPlayer, 
             type, 
-            lastActionTime: 0,
+            nextActionTick: 0,
             team: 'player',
             aiState: 'IDLE',
             targetLastPos: null,
@@ -48,7 +48,7 @@ export default class CombatSystem extends EventEmitter {
         if (this.enemiesConfig[type]) {
             const cfg = this.enemiesConfig[type];
             stats = { 
-                hp: cfg.hp, maxHp: cfg.hp, damage: cfg.damage, isPlayer, type, lastActionTime: 0, team: 'monster', aiState: 'IDLE', targetLastPos: null, memoryTimer: 0, invisible: false, name: cfg.name || type, attributes: { str: 10, agi: 10, will: 10 },
+                hp: cfg.hp, maxHp: cfg.hp, damage: cfg.damage, isPlayer, type, nextActionTick: 0, team: 'monster', aiState: 'IDLE', targetLastPos: null, memoryTimer: 0, invisible: false, name: cfg.name || type, attributes: { str: 10, agi: 10, will: 10 },
                 attackSpeed: cfg.attackSpeed || 4,
                 moveSpeed: cfg.moveSpeed || 1000
             };
@@ -69,18 +69,19 @@ export default class CombatSystem extends EventEmitter {
         this.stats.set(id, stats);
     }
 
-    useAbility(id) {
+    useAbility(id, currentTick, timePerTick) {
         const stats = this.stats.get(id);
         if (!stats || !stats.isPlayer) return null;
 
-        const now = Date.now();
-        const lastUse = this.cooldowns.get(id) || 0;
+        const lastUseTick = this.cooldowns.get(id) || 0;
         const classDef = this.classes[stats.class];
         
         if (!classDef) return null;
-        if (now - lastUse < classDef.cooldown) return null; // On Cooldown
+        
+        const cooldownTicks = Math.ceil(classDef.cooldown / timePerTick);
+        if (currentTick < lastUseTick + cooldownTicks) return null; // On Cooldown
 
-        this.cooldowns.set(id, now);
+        this.cooldowns.set(id, currentTick);
         
         // Execute Ability
         let result = { type: 'ABILITY', ability: classDef.ability, id };
@@ -177,7 +178,8 @@ export default class CombatSystem extends EventEmitter {
                 team: data.team, 
                 type: data.type,
                 isPlayer: data.type === 'player',
-                invisible: data.invisible
+                invisible: data.invisible,
+                nextActionTick: data.nextActionTick || 0
             };
             this.stats.set(id, stats);
         } else {
@@ -185,6 +187,7 @@ export default class CombatSystem extends EventEmitter {
             stats.maxHp = data.maxHp;
             stats.team = data.team;
             stats.invisible = data.invisible;
+            stats.nextActionTick = data.nextActionTick;
         }
     }
 

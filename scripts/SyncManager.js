@@ -8,34 +8,42 @@ export default class SyncManager {
         this.reusableEntities = new Map(); // Reuse to reduce GC
     }
 
-    serializeState(gridSystem, combatSystem, lootSystem, projectiles, gameTime) {
+    serializeState(gridSystem, combatSystem, lootSystem, projectiles, gameTime, fullSync = false) {
         // Create a lightweight snapshot of the game state
         const entities = [];
         for (const [id, pos] of gridSystem.entities) {
             const stats = combatSystem.getStats(id);
             // Attach visual stats to the entity position data for rendering
-            entities.push([id, { 
-                x: pos.x, 
-                y: pos.y, 
-                facing: pos.facing,
-                hp: stats ? stats.hp : 0, 
-                maxHp: stats ? stats.maxHp : 100, 
-                team: stats ? stats.team : 'player', 
-                type: stats ? stats.type : 'player',
-                invisible: pos.invisible,
-                lastActionTime: stats ? stats.lastActionTime : 0,
-                lastProcessedInputTick: stats ? stats.lastProcessedInputTick : 0
-            }]);
-
+            // OPTIMIZATION: Use Array format instead of Object to save bandwidth on keys
+            // [0:id, 1:x, 2:y, 3:facingX, 4:facingY, 5:hp, 6:maxHp, 7:type, 8:team, 9:invisible, 10:nextActionTick, 11:lastProcessedInputTick]
+            entities.push([
+                id,
+                Number(pos.x.toFixed(2)),
+                Number(pos.y.toFixed(2)),
+                pos.facing ? pos.facing.x : 0,
+                pos.facing ? pos.facing.y : 1,
+                stats ? Math.ceil(stats.hp) : 0,
+                stats ? stats.maxHp : 100,
+                stats ? stats.type : 'player',
+                stats ? stats.team : 'player',
+                pos.invisible ? 1 : 0,
+                stats ? stats.nextActionTick : 0,
+                stats ? stats.lastProcessedInputTick : 0
+            ]);
         }
 
-        return {
+        const snapshot = {
             t: Date.now(),
-            entities: entities,
-            loot: Array.from(lootSystem.worldLoot.entries()),
-            projectiles: projectiles || [],
-            gameTime: gameTime,
+            e: entities,
+            p: projectiles || [],
+            gt: gameTime,
         };
+
+        if (fullSync) {
+            snapshot.l = Array.from(lootSystem.worldLoot.entries());
+        }
+
+        return snapshot;
     }
 
     addSnapshot(snapshot) {
@@ -102,17 +110,17 @@ export default class SyncManager {
 
         this.reusableEntities.clear();
         const interpolatedEntities = this.reusableEntities;
-        const lootMap = new Map(next.loot || []); // Loot uses most recent state (no lerp needed)
+        const lootMap = next.l ? new Map(next.l) : null; // Only update loot if present
         const interpolatedProjectiles = [];
 
         const latest = this.snapshotBuffer[this.snapshotBuffer.length - 1];
-        const latestEntitiesMap = new Map(latest.entities);
+        const latestEntitiesMap = this._arrayToMap(latest.e);
 
         // Interpolate positions
-        const nextEntitiesMap = new Map(next.entities);
+        const nextEntitiesMap = this._arrayToMap(next.e);
         
         // Iterate over prev entities to interpolate towards next
-        for (const [id, prevPos] of prev.entities) {
+        for (const [id, prevPos] of this._arrayToMap(prev.e)) {
             if (nextEntitiesMap.has(id)) {
                 const nextPos = nextEntitiesMap.get(id);
                 const latestEntityData = latestEntitiesMap.get(id) || nextPos;
@@ -142,7 +150,7 @@ export default class SyncManager {
         }
         
         // Handle new entities that appeared in 'next' (Spawns)
-        for (const [id, nextPos] of next.entities) {
+        for (const [id, nextPos] of nextEntitiesMap) {
             if (!interpolatedEntities.has(id)) {
                 interpolatedEntities.set(id, nextPos);
             }
@@ -151,8 +159,8 @@ export default class SyncManager {
         // Interpolate Projectiles
         // We match projectiles by ID (assuming projectiles have IDs now)
         // If no ID, we can't interpolate, so we just take 'next'
-        const prevProjs = prev.projectiles || [];
-        const nextProjs = next.projectiles || [];
+        const prevProjs = prev.p || [];
+        const nextProjs = next.p || [];
         
         nextProjs.forEach(np => {
             const pp = prevProjs.find(p => p.id === np.id);
@@ -171,8 +179,8 @@ export default class SyncManager {
         return { 
             entities: interpolatedEntities, 
             loot: lootMap, 
-            projectiles: interpolatedProjectiles,
-            gameTime: next.gameTime 
+            projectiles: interpolatedProjectiles, 
+            gameTime: next.gt 
         };
     }
 
@@ -183,10 +191,31 @@ export default class SyncManager {
 
     convertSnapshotToState(snapshot) {
         return {
-            entities: new Map(snapshot.entities),
-            loot: new Map(snapshot.loot || []),
-            projectiles: snapshot.projectiles || [],
-            gameTime: snapshot.gameTime
+            entities: this._arrayToMap(snapshot.e),
+            loot: snapshot.l ? new Map(snapshot.l) : null,
+            projectiles: snapshot.p || [],
+            gameTime: snapshot.gt
         };
+    }
+
+    _arrayToMap(entityArray) {
+        const map = new Map();
+        if (!entityArray) return map;
+        for (const e of entityArray) {
+            // [0:id, 1:x, 2:y, 3:facingX, 4:facingY, 5:hp, 6:maxHp, 7:type, 8:team, 9:invisible, 10:nextActionTick, 11:lastProcessedInputTick]
+            map.set(e[0], {
+                x: e[1],
+                y: e[2],
+                facing: { x: e[3], y: e[4] },
+                hp: e[5],
+                maxHp: e[6],
+                type: e[7],
+                team: e[8],
+                invisible: !!e[9],
+                nextActionTick: e[10],
+                lastProcessedInputTick: e[11]
+            });
+        }
+        return map;
     }
 }
