@@ -389,7 +389,7 @@ export default class RenderSystem {
         return { x: 0, y: 0 };
     }
 
-    drawEntities(entities, localPlayerId, drawMode = 'ALL', ctx = this.ctx) {
+    drawEntities(entities, localPlayerId, drawMode = 'ALL', ctx = this.ctx, isHost = false) {
         const now = Date.now();
         const localPlayer = entities.get(localPlayerId);
         
@@ -458,14 +458,26 @@ export default class RenderSystem {
                     visual.moveStartTime = now;
                 }
 
-                // Interpolate visual position
+                // Interpolation Logic
                 if (!visual.isDying) {
-                    const moveDuration = 250;
-                    visual.moveT = Math.min(1, (now - visual.moveStartTime) / moveDuration);
+                    const isLocal = (id === localPlayerId);
+                    // Remote entities on client are already interpolated by SyncManager (Continuous).
+                    // Local player and Host entities move grid-by-grid (Discrete).
+                    const isContinuous = !isHost && !isLocal;
+
+                    if (isContinuous) {
+                        visual.moveT = 1; // Snap to the smooth position provided by SyncManager
+                        // Fix for animation: Calculate synthetic moveT based on grid position
+                        visual.animT = (Math.abs(visual.targetX) % 1) + (Math.abs(visual.targetY) % 1);
+                    } else {
+                        visual.moveT = Math.min(1, (now - visual.moveStartTime) / 250);
+                        visual.animT = visual.moveT;
+                    }
                     visual.x = visual.startX + (visual.targetX - visual.startX) * visual.moveT;
                     visual.y = visual.startY + (visual.targetY - visual.startY) * visual.moveT;
                 } else {
                     visual.moveT = 1; // Animation is finished if dying
+                    visual.animT = 0;
                 }
 
                 // Cache static data needed for rendering after death
@@ -521,7 +533,7 @@ export default class RenderSystem {
         for (const item of renderList) {
             const { id, pos, visual } = item;
             // Hop Animation (Based on interpolation progress 't' for a smooth arc)
-            const hopOffset = -Math.sin(visual.moveT * Math.PI) * (this.tileSize * 0.125);
+            const hopOffset = -Math.sin(visual.animT * Math.PI) * (this.tileSize * 0.125);
             
             // Idle Animation (Breathing & Swaying)
             let scaleY = 1;
@@ -1535,7 +1547,7 @@ export default class RenderSystem {
         return this.hullBuffer;
     }
 
-    render(grid, entities, loot, projectiles, interaction, localPlayerId) {
+    render(grid, entities, loot, projectiles, interaction, localPlayerId, isHost) {
         // Check if we need to update static cache
         if (this.gridSystem && this.gridSystem.revision !== this.lastGridRevision) {
             this.updateStaticCache(grid);
@@ -1616,7 +1628,7 @@ export default class RenderSystem {
         
         // 2. Draw Entities & Projectiles (Before Roofs/Ambient)
         this.drawProjectiles(projectiles);
-        this.drawEntities(entities, localPlayerId, 'ALL');
+        this.drawEntities(entities, localPlayerId, 'ALL', this.ctx, isHost);
         this.drawEffects();
 
         // 3. Update Shadow Buffer (Offscreen) - Moved after entities to use updated positions

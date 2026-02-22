@@ -162,6 +162,11 @@ export default class LootSystem {
         return { itemId: loot.itemId, count: loot.count || 1, gold: loot.gold || 0 };
     }
 
+    markOpened(lootId) {
+        const loot = this.worldLoot.get(lootId);
+        if (loot) loot.opened = true;
+    }
+
     pickupBag(entityId, lootId) {
         const loot = this.worldLoot.get(lootId);
         if (!loot) return null;

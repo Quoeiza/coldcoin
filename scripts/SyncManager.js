@@ -180,7 +180,8 @@ export default class SyncManager {
             entities: interpolatedEntities, 
             loot: lootMap, 
             projectiles: interpolatedProjectiles, 
-            gameTime: next.gt 
+            gameTime: next.gt,
+            timestamp: next.t
         };
     }
 
@@ -194,7 +195,8 @@ export default class SyncManager {
             entities: this._arrayToMap(snapshot.e),
             loot: snapshot.l ? new Map(snapshot.l) : null,
             projectiles: snapshot.p || [],
-            gameTime: snapshot.gt
+            gameTime: snapshot.gt,
+            timestamp: snapshot.t
         };
     }
 

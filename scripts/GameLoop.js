@@ -38,6 +38,7 @@ const NetworkEvents = {
     UPDATE_GOLD: 'UPDATE_GOLD',
     LOOT_SUCCESS: 'LOOT_SUCCESS',
     UPDATE_INVENTORY: 'UPDATE_INVENTORY',
+    LOOT_OPENED: 'LOOT_OPENED',
 };
 
 export default class GameLoop {
@@ -62,7 +63,8 @@ export default class GameLoop {
 
             // Client-side prediction & reconciliation
             inputBuffer: [],
-            lastProcessedInputTick: 0
+            lastProcessedInputTick: 0,
+            lastReconciledTime: 0
         };
         this.database = new Database();
         this.playerData = { name: 'Player', gold: 0, class: 'Fighter' };
@@ -358,6 +360,7 @@ export default class GameLoop {
                 this.renderSystem.addFloatingText(this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y, `+${itemName}`, '#FFD700');
             } else {
                 this.peerClient.send({ type: NetworkEvents.LOOT_SUCCESS, payload: { id: entityId } });
+                this.peerClient.send({ type: NetworkEvents.LOOT_OPENED, payload: { lootId: loot.id } });
                 if (this.state.isHost) this.sendInventoryUpdate(entityId);
             }
         }
@@ -529,6 +532,10 @@ export default class GameLoop {
                     if (data.payload.snapshot) {
                         this.syncManager.addSnapshot(data.payload.snapshot);
                         this.state.gameTime = data.payload.snapshot.gameTime;
+                        // Sync loot immediately to prevent collision issues on start
+                        if (data.payload.snapshot.l) {
+                            this.lootSystem.syncLoot(new Map(data.payload.snapshot.l));
+                        }
                     }
                     if (this.state.handshakeInterval) {
                         clearInterval(this.state.handshakeInterval);
@@ -618,6 +625,8 @@ export default class GameLoop {
                     if (this.lootSystem.inventories) this.lootSystem.inventories.set(this.state.myId, data.payload.inventory);
                     if (this.lootSystem.equipment) this.lootSystem.equipment.set(this.state.myId, data.payload.equipment);
                     this.uiSystem.renderInventory();
+                } else if (data.type === NetworkEvents.LOOT_OPENED) {
+                    this.lootSystem.markOpened(data.payload.lootId);
                 }
             }
         });
@@ -788,7 +797,7 @@ export default class GameLoop {
         }
     }
 
-    processPlayerInput(entityId, input) {
+    processPlayerInput(entityId, input, isReplay = false) {
         const { intent } = input;
         if (!intent || !intent.type) return;
 
@@ -819,23 +828,25 @@ export default class GameLoop {
 
                 if (proj) {
                     this.state.projectiles.push(proj);
-                    this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: proj });
-                    this.audioSystem.play('attack', pos.x, pos.y);
+                    if (!isReplay) this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: proj });
+                    if (!isReplay) this.audioSystem.play('attack', pos.x, pos.y);
                 } else {
                     const tx = pos.x + intent.direction.x;
                     const ty = pos.y + intent.direction.y;
                     const targetId = this.gridSystem.getEntityAt(tx, ty);
                     
                     if (targetId) {
-                        this.performAttack(entityId, targetId);
+                        this.performAttack(entityId, targetId, isReplay);
                     } else {
                         if (entityId === this.state.myId) {
-                            this.renderSystem.triggerAttack(entityId);
-                            this.renderSystem.addEffect(tx, ty, 'slash');
+                            if (!isReplay) {
+                                this.renderSystem.triggerAttack(entityId);
+                                this.renderSystem.addEffect(tx, ty, 'slash');
+                            }
                         } else {
-                            this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
+                            if (!isReplay) this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
                         }
-                        this.audioSystem.play('swing', pos.x, pos.y);
+                        if (!isReplay) this.audioSystem.play('swing', pos.x, pos.y);
                     }
                 }
             }
@@ -872,9 +883,9 @@ export default class GameLoop {
                     const chest = items.find(l => l.type === 'chest' && !l.opened);
                     if (chest) {
                         if (entityId === this.state.myId && !this.state.isHost) {
-                            this.peerClient.send({ type: NetworkEvents.INTERACT_LOOT, payload: { lootId: chest.id } });
+                            if (!isReplay) this.peerClient.send({ type: NetworkEvents.INTERACT_LOOT, payload: { lootId: chest.id } });
                         } else {
-                            this.processLootInteraction(entityId, chest);
+                            if (!isReplay) this.processLootInteraction(entityId, chest);
                         }
                     }
                     return;
@@ -886,26 +897,26 @@ export default class GameLoop {
 
             if (result.type === 'INTERACT_LOOT') {
                 if (pos) pos.facing = result.facing;
-                this.processLootInteraction(entityId, result.loot);
+                if (!isReplay) this.processLootInteraction(entityId, result.loot);
                 return;
             } else if (result.type === 'MOVED') {
-                this.renderSystem.triggerMove(entityId, { x: result.x, y: result.y });
+                if (!isReplay) this.renderSystem.triggerMove(entityId, { x: result.x, y: result.y });
                 if (entityId === this.state.myId) {
-                    this.audioSystem.play('step', pos.x, pos.y);
-                    this.renderSystem.addEffect(startX, startY, 'dust');
+                    if (!isReplay) this.audioSystem.play('step', pos.x, pos.y);
+                    if (!isReplay) this.renderSystem.addEffect(startX, startY, 'dust');
                 }
                 if (this.gridSystem.grid[Math.round(result.y)][Math.round(result.x)] === 9) {
                     this.handleEscape(entityId);
                 }
             } else if (result.type === 'BUMP_ENTITY') {
-                this.renderSystem.triggerBump(entityId, result.direction);
+                if (!isReplay) this.renderSystem.triggerBump(entityId, result.direction);
                 if (!this.combatSystem.isFriendly(entityId, result.targetId)) {
-                    this.performAttack(entityId, result.targetId);
+                    this.performAttack(entityId, result.targetId, isReplay);
                 }
             } else if (result.type === 'BUMP_WALL') {
-                this.renderSystem.triggerBump(entityId, result.direction);
+                if (!isReplay) this.renderSystem.triggerBump(entityId, result.direction);
                 if (entityId === this.state.myId) {
-                    this.audioSystem.play('bump', pos.x, pos.y);
+                    if (!isReplay) this.audioSystem.play('bump', pos.x, pos.y);
                     this.state.autoPath = [];
                 }
             }
@@ -917,7 +928,7 @@ export default class GameLoop {
                 const ty = pos.y + pos.facing.y;
                 const targetId = this.gridSystem.getEntityAt(tx, ty);
                 if (targetId) {
-                    this.performAttack(entityId, targetId);
+                    this.performAttack(entityId, targetId, isReplay);
                     return;
                 }
 
@@ -925,17 +936,19 @@ export default class GameLoop {
 
                 const items = this.lootSystem.getItemsAt(tx, ty);
                 if (items.length > 0) {
-                    if (entityId === this.state.myId) this.handleInteractWithLoot(items[0]);
-                    else this.processLootInteraction(entityId, items[0]);
+                    if (entityId === this.state.myId) { if (!isReplay) this.handleInteractWithLoot(items[0]); }
+                    else { if (!isReplay) this.processLootInteraction(entityId, items[0]); }
                     return;
                 }
 
-                this.renderSystem.triggerAttack(entityId);
-                this.renderSystem.addEffect(tx, ty, 'slash');
-                if (entityId !== this.state.myId) {
-                     this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
+                if (!isReplay) {
+                    this.renderSystem.triggerAttack(entityId);
+                    this.renderSystem.addEffect(tx, ty, 'slash');
                 }
-                this.audioSystem.play('swing', pos.x, pos.y);
+                if (entityId !== this.state.myId) {
+                     if (!isReplay) this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: tx, y: ty }});
+                }
+                if (!isReplay) this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
 
@@ -955,10 +968,10 @@ export default class GameLoop {
 
             if (target.type === 'items') {
                 if (target.items.length > 1) {
-                    if (entityId === this.state.myId) this.uiSystem.showGroundLoot(target.items);
+                    if (entityId === this.state.myId && !isReplay) this.uiSystem.showGroundLoot(target.items);
                 } else {
-                    if (entityId === this.state.myId) this.handleInteractWithLoot(target.items[0]);
-                    else this.processLootInteraction(entityId, target.items[0]); 
+                    if (entityId === this.state.myId) { if (!isReplay) this.handleInteractWithLoot(target.items[0]); }
+                    else { if (!isReplay) this.processLootInteraction(entityId, target.items[0]); }
                 }
             }
         }
@@ -969,19 +982,19 @@ export default class GameLoop {
             if (result && result.type === 'PROJECTILE') {
                 if (intent.projId) result.projectile.id = intent.projId;
                 this.state.projectiles.push(result.projectile);
-                this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: result.projectile });
-                this.audioSystem.play('attack', pos.x, pos.y);
-                this.renderSystem.triggerAttack(entityId);
+                if (!isReplay) this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: result.projectile });
+                if (!isReplay) this.audioSystem.play('attack', pos.x, pos.y);
+                if (!isReplay) this.renderSystem.triggerAttack(entityId);
             } else if (result && result.type === 'MELEE') {
-                this.performAttack(entityId, result.targetId);
+                this.performAttack(entityId, result.targetId, isReplay);
             } else if (result && result.type === 'MISS') {
                 if (entityId === this.state.myId) {
-                    this.renderSystem.triggerAttack(entityId);
-                    this.renderSystem.addEffect(result.x, result.y, 'slash');
+                    if (!isReplay) this.renderSystem.triggerAttack(entityId);
+                    if (!isReplay) this.renderSystem.addEffect(result.x, result.y, 'slash');
                 } else {
-                    this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: result.x, y: result.y }});
+                    if (!isReplay) this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss', x: result.x, y: result.y }});
                 }
-                this.audioSystem.play('swing', pos.x, pos.y);
+                if (!isReplay) this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
 
@@ -993,14 +1006,14 @@ export default class GameLoop {
                 if (attackerStats && targetStats && attackerStats.team === 'monster' && targetStats.team === 'monster') {
                     return;
                 }
-                this.performAttack(entityId, result.targetId);
+                this.performAttack(entityId, result.targetId, isReplay);
             } else if (result && result.type === 'MISS') {
                 if (entityId === this.state.myId) {
-                    this.renderSystem.addEffect(result.x, result.y, 'slash');
+                    if (!isReplay) this.renderSystem.addEffect(result.x, result.y, 'slash');
                 } else {
-                    this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss_slash', x: result.x, y: result.y }});
+                    if (!isReplay) this.peerClient.sendTo(entityId, { type: NetworkEvents.CLIENT_EFFECT, payload: { name: 'miss_slash', x: result.x, y: result.y }});
                 }
-                this.audioSystem.play('swing', pos.x, pos.y);
+                if (!isReplay) this.audioSystem.play('swing', pos.x, pos.y);
             }
         }
 
@@ -1010,7 +1023,7 @@ export default class GameLoop {
             
             const result = this.combatSystem.applyConsumableEffect(entityId, itemConfig);
             if (result) {
-                this.audioSystem.play('pickup', this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y);
+                if (!isReplay) this.audioSystem.play('pickup', this.gridSystem.entities.get(entityId).x, this.gridSystem.entities.get(entityId).y);
                 this.uiSystem.renderInventory();
                 this.uiSystem.updateQuickSlotUI();
             }
@@ -1043,7 +1056,7 @@ export default class GameLoop {
         }
     }
 
-    performAttack(attackerId, targetId) {
+    performAttack(attackerId, targetId, isReplay = false) {
         const result = this.combatSystem.resolveAttack(attackerId, targetId, this.gridSystem, this.lootSystem);
         if (!result) return;
 
@@ -1053,16 +1066,16 @@ export default class GameLoop {
                 ...result.projectile 
             };
             this.state.projectiles.push(proj);
-            this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: proj });
-            this.audioSystem.play('attack', result.projectile.x, result.projectile.y);
+            if (!isReplay) this.peerClient.send({ type: NetworkEvents.SPAWN_PROJECTILE, payload: proj });
+            if (!isReplay) this.audioSystem.play('attack', result.projectile.x, result.projectile.y);
             return;
         }
 
         if (result.type === 'MELEE') {
-            this.renderSystem.triggerAttack(attackerId);
-            this.renderSystem.addEffect(result.targetPos.x, result.targetPos.y, 'slash');
+            if (!isReplay) this.renderSystem.triggerAttack(attackerId);
+            if (!isReplay) this.renderSystem.addEffect(result.targetPos.x, result.targetPos.y, 'slash');
             
-            this.audioSystem.play('attack', attackerId === this.state.myId ? result.attackerPos.x : result.targetPos.x, result.targetPos.y);
+            if (!isReplay) this.audioSystem.play('attack', attackerId === this.state.myId ? result.attackerPos.x : result.targetPos.x, result.targetPos.y);
 
             if (this.state.isHost) {
                 this.combatSystem.applyDamage(targetId, result.damage, attackerId, { isCrit: result.isCrit });
@@ -1145,38 +1158,31 @@ export default class GameLoop {
         }
 
         if (!this.state.isHost && this.state.connected) {
+            const interpolatedState = this.syncManager.getInterpolatedState(Date.now());
             const latestState = this.syncManager.getLatestState();
             
-            if (latestState) {
+            if (interpolatedState) {
                 // First, update the state of all entities EXCEPT our own player.
-                this.gridSystem.syncRemoteEntities(latestState.entities, this.state.myId);
+                this.gridSystem.syncRemoteEntities(interpolatedState.entities, this.state.myId);
                 
                 // Only sync loot if the snapshot contained it (Full Sync)
-                if (latestState.loot) this.lootSystem.syncLoot(latestState.loot);
+                if (interpolatedState.loot) this.lootSystem.syncLoot(interpolatedState.loot);
 
-                for (const [id, data] of latestState.entities) {
+                for (const [id, data] of interpolatedState.entities) {
                     if (id !== this.state.myId) {
                         this.combatSystem.syncRemoteStats(id, data);
-                    } else {
-                        // For our own player, we only take non-positional data that we don't predict.
-                        // This is where we sync server-authoritative state to our local copy.
-                        const stats = this.combatSystem.getStats(id);
-                        if (stats) {
-                            stats.hp = data.hp;
-                            stats.maxHp = data.maxHp;
-                            stats.type = data.type;
-                            stats.team = data.team;
-                            stats.invisible = data.invisible;
-                            stats.nextActionTick = data.nextActionTick;
-                        }
                     }
                 }
                 
-                // Reconcile our player's position based on the server state and our pending inputs.
+                this.state.projectiles = interpolatedState.projectiles;
+                this.state.gameTime = interpolatedState.gameTime;
+            }
+            
+            if (latestState && latestState.timestamp > this.state.lastReconciledTime) {
+                // Reconcile our player's position based on the authoritative server state (latest)
+                // and our pending inputs.
                 this.reconcilePlayer(latestState);
-
-                this.state.projectiles = latestState.projectiles;
-                this.state.gameTime = latestState.gameTime;
+                this.state.lastReconciledTime = latestState.timestamp;
             }
         }
 
@@ -1332,17 +1338,27 @@ export default class GameLoop {
             return; // No inputs to reconcile yet, so we're done.
         }
 
-        // Hard snap to server state as requested for deterministic simulation
+        // 1. Snap to server state
         Object.assign(localPlayer, serverPlayerState);
         
         const stats = this.combatSystem.getStats(this.state.myId);
         if (stats) {
             stats.nextActionTick = serverPlayerState.nextActionTick;
             stats.hp = serverPlayerState.hp;
+            stats.maxHp = serverPlayerState.maxHp;
+            stats.type = serverPlayerState.type;
+            stats.team = serverPlayerState.team;
+            stats.invisible = serverPlayerState.invisible;
         }
         
-        // Clear input buffer since we are snapping to authoritative state
-        this.state.inputBuffer = [];
+        // 2. Remove processed inputs
+        const lastProcessed = serverPlayerState.lastProcessedInputTick || 0;
+        this.state.inputBuffer = this.state.inputBuffer.filter(input => input.tick > lastProcessed);
+
+        // 3. Replay remaining inputs
+        for (const input of this.state.inputBuffer) {
+            this.processPlayerInput(this.state.myId, input, true);
+        }
     }
 
     render(alpha) {
@@ -1359,7 +1375,8 @@ export default class GameLoop {
             this.lootSystem.worldLoot,
             this.state.projectiles,
             this.state.interaction,
-            this.state.myId
+            this.state.myId,
+            this.state.isHost
         );
     }
 }
